@@ -85,6 +85,13 @@ The editor uses one or two synchronized panes:
 - Insert all Level 1 alpha and mosaic colours.
 - Edit mosaic cells with the six Teletext mosaic keys.
 - Choose the G0 national subset for the complete file or leave it on Auto.
+- Choose a **Secondary G0 subset** for ESC switching, including all 13 Latin national subsets (also Serbian/Croatian/Slovenian,
+  often called Yugoslav). Auto
+  reads X/28/0 or X/28/4 page designations and M/29/0 or M/29/4 magazine defaults;
+  page settings take priority. ESC alternates the two subsets within a row and
+  each new row starts with the primary subset. Polish can also be selected as
+  the primary subset. All 13 Latin national subsets are supported; non-Latin G0 families
+  (Cyrillic, Greek, Arabic and Hebrew) are not decoded yet.
 
 ## X/26 enhancements and diacritics
 

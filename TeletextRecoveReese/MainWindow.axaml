@@ -109,6 +109,33 @@
                             <NativeMenuItem Header="French" CommandParameter="4" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
                             <NativeMenuItem Header="Portuguese/Spanish" CommandParameter="5" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
                             <NativeMenuItem Header="Czech/Slovak" CommandParameter="6" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
+                            <NativeMenuItem Header="Polish" CommandParameter="8" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
+                            <NativeMenuItem Header="Serbian/Croatian/Slovenian (Yugoslav)" CommandParameter="9" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
+                            <NativeMenuItem Header="Turkish" CommandParameter="10" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
+                            <NativeMenuItem Header="Romanian" CommandParameter="11" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
+                            <NativeMenuItem Header="Estonian" CommandParameter="12" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
+                            <NativeMenuItem Header="Latvian/Lithuanian" CommandParameter="13" ToggleType="CheckBox" Click="OnNativeG0SubsetClicked"/>
+                        </NativeMenu>
+                    </NativeMenuItem>
+                    <NativeMenuItem Header="Secondary G0 subset">
+                        <NativeMenu>
+                            <NativeMenuItem Header="Auto (from stream)" CommandParameter="auto" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Default G0 + enhancements" CommandParameter="default" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Disabled" CommandParameter="none" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItemSeparator/>
+                            <NativeMenuItem Header="English" CommandParameter="0" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="German" CommandParameter="1" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Swedish/Finnish/Hungarian" CommandParameter="2" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Italian" CommandParameter="3" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="French" CommandParameter="4" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Portuguese/Spanish" CommandParameter="5" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Czech/Slovak" CommandParameter="6" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Polish" CommandParameter="8" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Serbian/Croatian/Slovenian (Yugoslav)" CommandParameter="9" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Turkish" CommandParameter="10" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Romanian" CommandParameter="11" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Estonian" CommandParameter="12" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
+                            <NativeMenuItem Header="Latvian/Lithuanian" CommandParameter="13" ToggleType="CheckBox" Click="OnNativeSecondaryG0SubsetClicked"/>
                         </NativeMenu>
                     </NativeMenuItem>
                 </NativeMenu>
@@ -237,6 +264,31 @@
                     <MenuItem Header="French" CommandParameter="4" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
                     <MenuItem Header="Portuguese/Spanish" CommandParameter="5" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
                     <MenuItem Header="Czech/Slovak" CommandParameter="6" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
+                    <MenuItem Header="Polish" CommandParameter="8" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
+                    <MenuItem Header="Serbian/Croatian/Slovenian (Yugoslav)" CommandParameter="9" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
+                    <MenuItem Header="Turkish" CommandParameter="10" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
+                    <MenuItem Header="Romanian" CommandParameter="11" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
+                    <MenuItem Header="Estonian" CommandParameter="12" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
+                    <MenuItem Header="Latvian/Lithuanian" CommandParameter="13" ToggleType="CheckBox" Click="OnG0SubsetClicked"/>
+                </MenuItem>
+                <MenuItem x:Name="SecondaryG0SubsetMenuItem" Header="Secondary G0 subset">
+                    <MenuItem Header="Auto (from stream)" CommandParameter="auto" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Default G0 + enhancements" CommandParameter="default" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Disabled" CommandParameter="none" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <Separator/>
+                    <MenuItem Header="English" CommandParameter="0" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="German" CommandParameter="1" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Swedish/Finnish/Hungarian" CommandParameter="2" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Italian" CommandParameter="3" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="French" CommandParameter="4" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Portuguese/Spanish" CommandParameter="5" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Czech/Slovak" CommandParameter="6" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Polish" CommandParameter="8" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Serbian/Croatian/Slovenian (Yugoslav)" CommandParameter="9" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Turkish" CommandParameter="10" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Romanian" CommandParameter="11" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Estonian" CommandParameter="12" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
+                    <MenuItem Header="Latvian/Lithuanian" CommandParameter="13" ToggleType="CheckBox" Click="OnSecondaryG0SubsetClicked"/>
                 </MenuItem>
             </MenuItem>
             <MenuItem Header="_Options">

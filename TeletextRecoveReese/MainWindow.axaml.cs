@@ -625,6 +625,7 @@ public partial class MainWindow : Window
     private NativeMenuItem? _nativeExportVideoMenuItem;
     private NativeMenuItem? _nativeOpenRecentMenuItem;
     private NativeMenuItem? _nativeG0SubsetMenuItem;
+    private NativeMenuItem? _nativeSecondaryG0SubsetMenuItem;
     private NativeMenuItem? _nativeCreateSquashedStreamMenuItem;
     private NativeMenuItem? _nativeApplySquashedRepairsMenuItem;
     private NativeMenuItem? _nativePreviousPageMenuItem;
@@ -650,6 +651,8 @@ public partial class MainWindow : Window
     private bool _previewingBroadcastVersion;
     private int? _squashFileG0Subset;
     private int? _broadcastFileG0Subset;
+    private int? _squashFileSecondaryG0Subset;
+    private int? _broadcastFileSecondaryG0Subset;
     private int _pinnedTransferRowHighlight = -1;
     private bool _suppressNextTransferRowClick;
     private int _blockBrowseVersionIndex = -1;
@@ -2875,7 +2878,7 @@ public partial class MainWindow : Window
                 char baseCharacter = default;
                 int diacritical = -1;
                 byte code;
-                if (TryEncodeDisplayedG0Character(page, element, out code))
+                if (TryEncodeDisplayedG0Character(page, element, column, row, out code))
                 {
                     // Prefer an exact Level-1 national-subset character when the
                     // current page can represent it without an enhancement packet.
@@ -2934,13 +2937,15 @@ public partial class MainWindow : Window
     private static bool TryEncodeDisplayedG0Character(
         TeletextPage page,
         string textElement,
+        int column,
+        int row,
         out byte code)
     {
         code = default;
         if (textElement.Length != 1) return false;
 
         char character = textElement[0];
-        int nationalOption = page.NationalOptionOverride ?? page.NationalOption;
+        int nationalOption = page.NationalOptionAt(column, row);
         for (int candidate = 0x20; candidate <= 0x7F; candidate++)
         {
             if (CharacterSets.Decode((byte)candidate, nationalOption) != character) continue;
@@ -3853,7 +3858,18 @@ public partial class MainWindow : Window
             ApplyG0SubsetSelection(item.CommandParameter?.ToString());
     }
 
-    private void ApplyG0SubsetSelection(string? selection)
+    private void OnNativeSecondaryG0SubsetClicked(object? sender, EventArgs e)
+    {
+        if (sender is NativeMenuItem item) ApplyG0SubsetSelection(item.CommandParameter?.ToString(), secondary: true);
+        Dispatcher.UIThread.Post(UpdateG0SubsetMenuChecks, DispatcherPriority.Background);
+    }
+
+    private void OnSecondaryG0SubsetClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem item) ApplyG0SubsetSelection(item.CommandParameter?.ToString(), secondary: true);
+    }
+
+    private void ApplyG0SubsetSelection(string? selection, bool secondary = false)
     {
         TeletextGridControl? grid = GetG0TargetGrid();
         if (grid is null) return;
@@ -3863,19 +3879,26 @@ public partial class MainWindow : Window
             selectedSubset = null;
         else if (string.Equals(selection, "default", StringComparison.OrdinalIgnoreCase))
             selectedSubset = -1;
-        else if (int.TryParse(selection, out int option) && option is >= 0 and <= 6)
+        else if (secondary && selection == "none")
+            selectedSubset = -2;
+        else if (int.TryParse(selection, out int option) && CharacterSets.IsNationalSubset(option))
             selectedSubset = option;
         else
             return;
 
         bool broadcast = grid == BroadcastGrid;
-        if (broadcast)
-            _broadcastFileG0Subset = selectedSubset;
+        if (secondary)
+        {
+            if (broadcast) _broadcastFileSecondaryG0Subset = selectedSubset;
+            else _squashFileSecondaryG0Subset = selectedSubset;
+        }
         else
-            _squashFileG0Subset = selectedSubset;
+        {
+            if (broadcast) _broadcastFileG0Subset = selectedSubset;
+            else _squashFileG0Subset = selectedSubset;
+        }
 
-        if (grid.Page is { } page)
-            PageAssembler.SetNationalOptionOverride(page, selectedSubset);
+        if (grid.Page is { } page) ApplyFileG0SubsetToPage(page, broadcast);
         grid.InvalidateVisual();
         if (grid == SquashGrid)
             UpdateEnhancementList(grid.Page);
@@ -3885,7 +3908,9 @@ public partial class MainWindow : Window
     private void ApplyFileG0SubsetToPage(TeletextPage page, bool broadcast)
     {
         int? selectedSubset = broadcast ? _broadcastFileG0Subset : _squashFileG0Subset;
-        if (page.NationalOptionOverride == selectedSubset) return;
+        int? secondary = broadcast ? _broadcastFileSecondaryG0Subset : _squashFileSecondaryG0Subset;
+        if (page.NationalOptionOverride == selectedSubset && page.SecondaryNationalOptionOverride == secondary) return;
+        page.SecondaryNationalOptionOverride = secondary;
         PageAssembler.SetNationalOptionOverride(page, selectedSubset);
     }
 
@@ -3903,6 +3928,12 @@ public partial class MainWindow : Window
             foreach (NativeMenuItem item in nativeMenu.Items.OfType<NativeMenuItem>())
                 item.IsChecked = IsG0MenuSelectionChecked(item.CommandParameter?.ToString(), selectedSubset);
         }
+        int? secondary = broadcast ? _broadcastFileSecondaryG0Subset : _squashFileSecondaryG0Subset;
+        foreach (MenuItem item in SecondaryG0SubsetMenuItem.Items.OfType<MenuItem>())
+            item.IsChecked = IsG0MenuSelectionChecked(item.CommandParameter?.ToString(), secondary);
+        if (_nativeSecondaryG0SubsetMenuItem?.Menu is { } secondaryMenu)
+            foreach (NativeMenuItem item in secondaryMenu.Items.OfType<NativeMenuItem>())
+                item.IsChecked = IsG0MenuSelectionChecked(item.CommandParameter?.ToString(), secondary);
     }
 
     private static bool IsG0MenuSelectionChecked(string? selection, int? selectedSubset)
@@ -3911,8 +3942,9 @@ public partial class MainWindow : Window
             return !selectedSubset.HasValue;
         if (string.Equals(selection, "default", StringComparison.OrdinalIgnoreCase))
             return selectedSubset == -1;
+        if (selection == "none") return selectedSubset == -2;
         return int.TryParse(selection, out int option)
-            && option is >= 0 and <= 6
+            && CharacterSets.IsNationalSubset(option)
             && selectedSubset == option;
     }
 
@@ -4247,6 +4279,13 @@ public partial class MainWindow : Window
             .Menu?.Items
             .OfType<NativeMenuItem>()
             .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "G0 subset", StringComparison.Ordinal));
+
+        _nativeSecondaryG0SubsetMenuItem = menu.Items
+            .OfType<NativeMenuItem>()
+            .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Page", StringComparison.Ordinal))?
+            .Menu?.Items
+            .OfType<NativeMenuItem>()
+            .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Secondary G0 subset", StringComparison.Ordinal));
 
         _nativeCreateSquashedStreamMenuItem = menu.Items
             .OfType<NativeMenuItem>()
@@ -6599,6 +6638,9 @@ public partial class MainWindow : Window
                     SubPage = body.SubPage,
                     NationalOption = body.NationalOption,
                     NationalOptionOverride = body.NationalOptionOverride,
+                    SecondaryNationalOptionOverride = body.SecondaryNationalOptionOverride,
+                    DefaultCharacterSetDesignation = body.DefaultCharacterSetDesignation,
+                    SecondaryCharacterSetDesignation = body.SecondaryCharacterSetDesignation,
                     Newsflash = body.Newsflash,
                     Subtitle = body.Subtitle,
                     Suppress = body.Suppress,
@@ -8181,6 +8223,7 @@ public partial class MainWindow : Window
         _decodedBroadcastInstance = null;
         _broadcastReadOnlyExplanationShown = false;
         _broadcastFileG0Subset = null;
+        _broadcastFileSecondaryG0Subset = null;
         _broadcastEnhancementsScanned.Clear();
         _broadcastFastextScanned.Clear();
         _suppressComboEvents = true;
@@ -8203,6 +8246,7 @@ public partial class MainWindow : Window
     private void ClearSquashPane()
     {
         _squashFileG0Subset = null;
+        _squashFileSecondaryG0Subset = null;
         _suppressComboEvents = true;
         SquashMagazineComboBox.Items.Clear();
         SquashPageNumberComboBox.Items.Clear();
@@ -10468,6 +10512,9 @@ public partial class MainWindow : Window
             if (sourcePage.RawRows[row] is { } raw)
                 PageAssembler.ApplyRow(copiedPage, row, (byte[])raw.Clone());
         }
+
+        foreach (var packet in sourcePage.EffectiveCharacterSetPackets)
+            PageAssembler.ApplyCharacterSetPacket(copiedPage, packet.RawPacket);
 
         PageAssembler.ReplaceEnhancementPackets(
             copiedPage,
@@ -13101,6 +13148,8 @@ public partial class MainWindow : Window
                         ?? CreateBlankPacket(page, row)).Clone());
                 foreach (var enhancement in page.EnhancementPackets.OrderBy(packet => packet.DesignationCode))
                     newPagePackets.Add((byte[])enhancement.RawPacket.Clone());
+                foreach (var charset in page.EffectiveCharacterSetPackets)
+                    newPagePackets.Add((byte[])charset.RawPacket.Clone());
                 if (page.FastextPacket is { } fastext)
                     newPagePackets.Add((byte[])fastext.Clone());
             }
@@ -13118,6 +13167,7 @@ public partial class MainWindow : Window
         {
             int anchor = page.RawRowPacketIndices
                 .Concat(page.EnhancementPackets.Select(packet => packet.PacketIndex))
+                .Concat(page.EffectiveCharacterSetPackets.Select(packet => packet.PacketIndex))
                 .Append(page.FastextPacketIndex)
                 .Where(index => index >= 0)
                 .DefaultIfEmpty(-1)
@@ -13135,6 +13185,8 @@ public partial class MainWindow : Window
                         ?? CreateBlankPacket(page, row)).Clone());
                 foreach (var enhancement in page.EnhancementPackets.OrderBy(packet => packet.DesignationCode))
                     completePage.Add((byte[])enhancement.RawPacket.Clone());
+                foreach (var charset in page.EffectiveCharacterSetPackets)
+                    completePage.Add((byte[])charset.RawPacket.Clone());
                 if (page.FastextPacket is { } completeFastext)
                     completePage.Add((byte[])completeFastext.Clone());
                 continue;
@@ -13151,6 +13203,18 @@ public partial class MainWindow : Window
                     if (!insertAfter.TryGetValue(anchor, out var newEnhancements))
                         insertAfter[anchor] = newEnhancements = new List<byte[]>();
                     newEnhancements.Add((byte[])enhancement.RawPacket.Clone());
+                }
+            }
+
+            foreach (var charset in page.EffectiveCharacterSetPackets)
+            {
+                if (charset.PacketIndex >= 0 && charset.PacketIndex < output.Count)
+                    output[charset.PacketIndex] = (byte[])charset.RawPacket.Clone();
+                else
+                {
+                    if (!insertAfter.TryGetValue(anchor, out var newCharacterSets))
+                        insertAfter[anchor] = newCharacterSets = new List<byte[]>();
+                    newCharacterSets.Add((byte[])charset.RawPacket.Clone());
                 }
             }
 

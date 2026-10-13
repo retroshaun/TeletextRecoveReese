@@ -9,6 +9,10 @@ optional handling of nonzero subcodes, virtual-address collisions, parity noise,
 partial receptions, header control flags, noisy outliers and cancellation. They do
 not require an external test package or a captured broadcast.
 
+Character-set checks also cover Polish mappings, ESC switching and row reset,
+manual overrides, X/28 and M/29 precedence, Hamming errors, mosaics and squash
+round trips with self-contained character-set designations.
+
 To also run the Eurotext capture regressions (three contents on page 100,
 unchanged stable page 132), pass its local path as the first argument:
 

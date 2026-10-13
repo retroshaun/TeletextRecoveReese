@@ -236,6 +236,8 @@ if (args.Length > 0)
     Console.WriteLine($"Real capture: {capture.Count} packets; normal={normal.Count} pages, rotating={rotating.Count} pages.");
 }
 
+CharacterSetRegressions.Run();
+
 var cancelled = new CancellationToken(true);
 try
 {

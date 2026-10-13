@@ -138,6 +138,15 @@ public static class RecoverySquasher
                     .ToList();
                 if (fastextCandidates.Count > 0)
                     output.Add(BuildFastextConsensus(fastextCandidates, address.magazine, cancellationToken));
+
+                foreach (var group in versions.SelectMany(instance => instance.Page.EffectiveCharacterSetPackets)
+                             .GroupBy(packet => packet.DesignationCode).OrderBy(group => group.Key))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var selected = group.GroupBy(packet => Convert.ToHexString(packet.RawPacket))
+                        .OrderByDescending(copies => copies.Count()).First().First();
+                    output.Add((byte[])selected.RawPacket.Clone());
+                }
             }
 
             if ((addressIndex & 0x0F) == 0 || addressIndex == addresses.Count - 1)

@@ -16,6 +16,7 @@ public class PageAssembler
 
     // magazine -> the instance currently being built (rows are still arriving for it)
     private readonly Dictionary<int, PageInstance> _inProgress = new();
+    private readonly Dictionary<int, Dictionary<int, byte[]>> _magazineCharacterSets = new();
 
     public TeletextPage? LastUpdatedPage { get; private set; }
     public TeletextPage? LastFinalizedPage { get; private set; }
@@ -72,6 +73,16 @@ public class PageAssembler
         {
             HandleFastextPacket(magazine, raw42, packetIndex);
         }
+        else if (row == 28 && _inProgress.TryGetValue(magazine, out var pageInstance))
+            ApplyCharacterSetPacket(pageInstance.Page, raw42, packetIndex);
+        else if (row == 29 && CharacterSetPacket.TryRead(raw42, out _, out _))
+        {
+            if (!_magazineCharacterSets.TryGetValue(magazine, out var defaults))
+                _magazineCharacterSets[magazine] = defaults = new();
+            defaults[Hamming.Decode84(raw42[2]).Value] = (byte[])raw42.Clone();
+            if (_inProgress.TryGetValue(magazine, out var current))
+                ApplyMagazineCharacterSets(current.Page, defaults);
+        }
 
         if (_inProgress.TryGetValue(magazine, out var updated))
             LastUpdatedPage = updated.Page;
@@ -115,6 +126,9 @@ public class PageAssembler
             Page = new TeletextPage { Magazine = magazine, PageNumber = pageNumber, SubPage = subpage },
         };
         _inProgress[magazine] = newInstance;
+
+        if (_magazineCharacterSets.TryGetValue(magazine, out var characterSets))
+            ApplyMagazineCharacterSets(newInstance.Page, characterSets);
 
         ApplyRow(newInstance.Page, 0, raw42, packetIndex);
     }
@@ -342,6 +356,45 @@ public class PageAssembler
     public static void SetNationalOptionOverride(TeletextPage page, int? nationalOptionOverride)
     {
         page.NationalOptionOverride = nationalOptionOverride;
+        RefreshCharacterSets(page);
+    }
+
+    public static void SetSecondaryNationalOptionOverride(TeletextPage page, int? subset)
+    {
+        page.SecondaryNationalOptionOverride = subset;
+        RefreshCharacterSets(page);
+    }
+
+    private static void ApplyMagazineCharacterSets(TeletextPage page, Dictionary<int, byte[]> defaults)
+    {
+        foreach (var raw in defaults.Values)
+        {
+            var normalized = (byte[])raw.Clone();
+            int address = (28 << 3) | (page.Magazine & 7);
+            normalized[0] = Hamming.Encode84(address & 15);
+            normalized[1] = Hamming.Encode84(address >> 4);
+            ApplyCharacterSetPacket(page, normalized, -1, isMagazineDefault: true);
+        }
+    }
+
+    public static bool ApplyCharacterSetPacket(TeletextPage page, byte[] raw, int packetIndex = -1, bool isMagazineDefault = false)
+    {
+        if (!CharacterSetPacket.TryRead(raw, out _, out _)) return false;
+        int designation = Hamming.Decode84(raw[2]).Value;
+        page.CharacterSetPackets.RemoveAll(packet => packet.DesignationCode == designation
+            && packet.IsMagazineDefault == isMagazineDefault);
+        page.CharacterSetPackets.Add(new((byte[])raw.Clone(), packetIndex, isMagazineDefault));
+        var selected = page.CharacterSetPackets.OrderBy(packet => packet.IsMagazineDefault)
+            .ThenBy(packet => packet.DesignationCode).First();
+        CharacterSetPacket.TryRead(selected.RawPacket, out int primary, out int secondary);
+        page.DefaultCharacterSetDesignation = primary;
+        page.SecondaryCharacterSetDesignation = secondary;
+        RefreshCharacterSets(page);
+        return true;
+    }
+
+    private static void RefreshCharacterSets(TeletextPage page)
+    {
         for (int row = 0; row < 25; row++)
         {
             if (page.RawRows[row] is not { Length: 42 } raw) continue;
@@ -1269,6 +1322,7 @@ public class PageAssembler
         bool boxed = false;
         bool doubleHeight = false;
         bool doubleWidth = false;
+        bool secondarySet = false;
         byte heldPattern = 0;
         bool haveHeldPattern = false;
 
@@ -1304,7 +1358,7 @@ public class PageAssembler
                     case 0x18: concealed = true; break;      // CDY Conceal display
                     case 0x19: contiguous = true; break;     // Contiguous mosaic graphics
                     case 0x1A: contiguous = false; break;    // Separated mosaic graphics
-                    case 0x1B: break;                        // ESC/Switch (charset switching not implemented)
+                    case 0x1B: secondarySet = !secondarySet; break; // ESC: set-after, reset each row
                     case 0x1C: currentBg = TeletextColor.Black; break; // BBD Black background
                     case 0x1D: currentBg = currentFg; break;  // NBD New background = current foreground
                     case 0x1E: holdActive = true; break;      // HMS Hold mosaics
@@ -1384,7 +1438,7 @@ public class PageAssembler
                 cell.IsMosaic = false;
                 cell.Character = CharacterSets.Decode(
                     raw,
-                    page.NationalOptionOverride ?? page.NationalOption);
+                    secondarySet ? page.SecondaryNationalOption ?? page.PrimaryNationalOption : page.PrimaryNationalOption);
                 cell.Foreground = currentFg;
             }
 

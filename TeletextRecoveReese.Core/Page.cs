@@ -87,6 +87,31 @@ public class TeletextPage
     public int NationalOption { get; set; }
     /// <summary>Optional display override; -1 selects the unmodified Latin G0 set.</summary>
     public int? NationalOptionOverride { get; set; }
+    /// <summary>Secondary display override; -2 disables ESC switching.</summary>
+    public int? SecondaryNationalOptionOverride { get; set; }
+    public int? DefaultCharacterSetDesignation { get; set; }
+    public int? SecondaryCharacterSetDesignation { get; set; }
+    public List<CharacterSetPacket> CharacterSetPackets { get; } = new();
+    public IEnumerable<CharacterSetPacket> EffectiveCharacterSetPackets =>
+        CharacterSetPackets.Any(packet => !packet.IsMagazineDefault)
+            ? CharacterSetPackets.Where(packet => !packet.IsMagazineDefault)
+            : CharacterSetPackets;
+    public int PrimaryNationalOption => NationalOptionOverride
+        ?? (DefaultCharacterSetDesignation is int designation
+            ? CharacterSets.FromDesignation((designation & 0x78) | NationalOption) : null)
+        ?? NationalOption;
+    public int? SecondaryNationalOption => SecondaryNationalOptionOverride == -2 ? null
+        : SecondaryNationalOptionOverride
+          ?? (SecondaryCharacterSetDesignation is int designation ? CharacterSets.FromDesignation(designation) : null);
+
+    public int NationalOptionAt(int column, int row)
+    {
+        bool secondary = false;
+        if (RawRows[row] is { Length: 42 } packet)
+            for (int x = row == 0 ? 8 : 0; x < column; x++)
+                if ((packet[x + 2] & 0x7F) == 0x1B) secondary = !secondary;
+        return secondary ? SecondaryNationalOption ?? PrimaryNationalOption : PrimaryNationalOption;
+    }
 
     /// <summary>40 columns x 25 rows. Row index maps directly to teletext row number:
     /// index 0 = header (row 0), indices 1-24 = body text (rows 1-24).</summary>
