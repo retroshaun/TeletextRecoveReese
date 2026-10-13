@@ -1,0 +1,17 @@
+Run the synthetic squash regressions with:
+
+```sh
+dotnet run --project Tests/RecoveryRegressionTests/RecoveryRegressionTests.csproj
+```
+
+The checks cover row-presence voting, rotating contents at identical addresses,
+optional handling of nonzero subcodes, virtual-address collisions, parity noise,
+partial receptions, header control flags, noisy outliers and cancellation. They do
+not require an external test package or a captured broadcast.
+
+To also run the Eurotext capture regressions (three contents on page 100,
+unchanged stable page 132), pass its local path as the first argument:
+
+```sh
+dotnet run --project Tests/RecoveryRegressionTests/RecoveryRegressionTests.csproj -- /path/to/eurotext.t42
+```

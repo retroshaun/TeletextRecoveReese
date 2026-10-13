@@ -104,6 +104,16 @@ The editor uses one or two synchronized panes:
   receptions, matching `vhs-teletext` row-presence voting. Enable **Keep
   infrequently received rows** in the squash dialog to retain rare rows too.
 - Preserve X/26 packets selected from the available versions.
+- Enable **Detect rotating pages with the same address** to recover recurring
+  contents at any identical page/subcode as virtual subpages. This is off by
+  default. Repeated local patterns must be confirmed by stable differences
+  elsewhere in the body, with at least three copies and 10% of the original
+  address's receptions supporting each variant. Isolated errors do not create
+  subpages; without enough evidence, the normal squash uses all copies.
+  Ambiguous damaged copies are excluded only when distinct contents have been
+  confirmed. The first group retains its subcode; others use free subcodes,
+  which may exceed the source subpage filter. Detection is conservative and
+  may leave very rare or subtly different contents combined.
 - Optionally keep every live-capture VBI line as a vhs-teletext-compatible
   all-zero T42 slot when no packet can be recovered.
 - Apply edited squashed pages back to every matching Full Broadcast occurrence

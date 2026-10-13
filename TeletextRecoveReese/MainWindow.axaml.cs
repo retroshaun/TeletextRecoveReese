@@ -11196,6 +11196,13 @@ public partial class MainWindow : Window
             Content = "Keep infrequently received rows",
             IsChecked = false,
         };
+        var separateContentVariants = new CheckBox
+        {
+            Content = "Detect rotating pages with the same address",
+            IsChecked = false,
+        };
+        ToolTip.SetTip(separateContentVariants,
+            "Recover repeatedly observed contents as separate virtual subpages.");
         var requireServiceHeader = new CheckBox
         {
             Content = "Require service-name header match",
@@ -11206,6 +11213,10 @@ public partial class MainWindow : Window
         {
             Minimum = 0, Maximum = 100, Value = 60, Width = 150,
         };
+        ToolTip.SetTip(keepInfrequentlyReceivedRows,
+            "Keep text rows even when absent from most copies. May retain stray content on empty lines.");
+        ToolTip.SetTip(requireServiceHeader,
+            "Match stable service-name characters learned from the stream; ignore clocks and page numbers.");
         var createButton = new Button
         {
             Content = "Create",
@@ -11224,77 +11235,64 @@ public partial class MainWindow : Window
             SizeToContent = SizeToContent.WidthAndHeight,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
+            Content = new ScrollViewer
             {
-                Width = 590,
-                Margin = new Thickness(20),
-                Spacing = 12,
-                Children =
+                MaxHeight = 680,
+                Content = new StackPanel
                 {
-                    new TextBlock
+                    Width = 590,
+                    Margin = new Thickness(20),
+                    Spacing = 12,
+                    Children =
                     {
-                        Text = "Recovery filters",
-                        FontWeight = FontWeight.SemiBold,
-                        FontSize = 16,
-                    },
-                    new TextBlock
-                    {
-                        Text = "Filters remove implausible page addresses before the best rows are combined. Singleton pages remain allowed by default.",
-                        TextWrapping = TextWrapping.Wrap,
-                        Foreground = Brushes.LightGray,
-                    },
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 10,
-                        Children =
+                        new TextBlock
                         {
-                            new TextBlock { Text = "Minimum distinct body rows", Width = 300, VerticalAlignment = VerticalAlignment.Center },
-                            minimumRows,
+                            Text = "Recovery filters",
+                            FontWeight = FontWeight.SemiBold,
+                            FontSize = 16,
                         },
-                    },
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 10,
-                        Children = { limitSubpages, maximumSubpage, new TextBlock { Text = "(decimal)", VerticalAlignment = VerticalAlignment.Center } },
-                    },
-                    standardPages,
-                    keepInfrequentlyReceivedRows,
-                    new TextBlock
-                    {
-                        Text = "By default, text rows are kept only when present in more than half of the page receptions. Enable this to also recover rare rows, which may include stray content on normally empty lines.",
-                        TextWrapping = TextWrapping.Wrap,
-                        Foreground = Brushes.LightGray,
-                    },
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 10,
-                        Children =
+                        new StackPanel
                         {
-                            new TextBlock { Text = "Minimum receptions of an address", Width = 300, VerticalAlignment = VerticalAlignment.Center },
-                            minimumReceptions,
+                            Orientation = Orientation.Horizontal,
+                            Spacing = 10,
+                            Children =
+                            {
+                                new TextBlock { Text = "Minimum distinct body rows", Width = 300, VerticalAlignment = VerticalAlignment.Center },
+                                minimumRows,
+                            },
                         },
-                    },
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 10,
-                        Children = { requireServiceHeader, headerSimilarity, new TextBlock { Text = "%", VerticalAlignment = VerticalAlignment.Center } },
-                    },
-                    new TextBlock
-                    {
-                        Text = "The service-name signature is learned automatically from stable header characters across the stream. Changing clocks and page numbers are ignored.",
-                        TextWrapping = TextWrapping.Wrap,
-                        Foreground = Brushes.LightGray,
-                    },
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        Spacing = 8,
-                        Children = { cancelButton, createButton },
+                        new StackPanel
+                        {
+                            Orientation = Orientation.Horizontal,
+                            Spacing = 10,
+                            Children = { limitSubpages, maximumSubpage, new TextBlock { Text = "(decimal)", VerticalAlignment = VerticalAlignment.Center } },
+                        },
+                        standardPages,
+                        keepInfrequentlyReceivedRows,
+                        new StackPanel
+                        {
+                            Orientation = Orientation.Horizontal,
+                            Spacing = 10,
+                            Children =
+                            {
+                                new TextBlock { Text = "Minimum receptions of an address", Width = 300, VerticalAlignment = VerticalAlignment.Center },
+                                minimumReceptions,
+                            },
+                        },
+                        new StackPanel
+                        {
+                            Orientation = Orientation.Horizontal,
+                            Spacing = 10,
+                            Children = { requireServiceHeader, headerSimilarity, new TextBlock { Text = "%", VerticalAlignment = VerticalAlignment.Center } },
+                        },
+                        separateContentVariants,
+                        new StackPanel
+                        {
+                            Orientation = Orientation.Horizontal,
+                            HorizontalAlignment = HorizontalAlignment.Right,
+                            Spacing = 8,
+                            Children = { cancelButton, createButton },
+                        },
                     },
                 },
             },
@@ -11304,7 +11302,6 @@ public partial class MainWindow : Window
             maximumSubpage.IsEnabled = limitSubpages.IsChecked == true;
         requireServiceHeader.IsCheckedChanged += (_, _) =>
             headerSimilarity.IsEnabled = requireServiceHeader.IsChecked == true;
-
         RecoverySquashOptions? result = null;
         createButton.Click += (_, _) =>
         {
@@ -11317,6 +11314,7 @@ public partial class MainWindow : Window
                 StandardDecimalPagesOnly = standardPages.IsChecked == true,
                 MinimumReceptions = (int)(minimumReceptions.Value ?? 1),
                 KeepInfrequentlyReceivedRows = keepInfrequentlyReceivedRows.IsChecked == true,
+                SeparateContentVariants = separateContentVariants.IsChecked == true,
                 RequireServiceHeader = requireServiceHeader.IsChecked == true,
                 MinimumHeaderSimilarityPercent = (int)(headerSimilarity.Value ?? 60),
             };

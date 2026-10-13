@@ -11,10 +11,12 @@ public sealed class RecoverySquashOptions
     public bool RequireServiceHeader { get; init; } = true;
     public int MinimumHeaderSimilarityPercent { get; init; } = 60;
     public bool KeepInfrequentlyReceivedRows { get; init; }
+    public bool SeparateContentVariants { get; init; }
 }
 
 /// <summary>
-/// Builds one recovery page per address from every occurrence in a broadcast.
+/// Builds recovery pages from every occurrence in a broadcast, optionally
+/// separating contents at the same address into virtual subpages.
 /// A complete, internally coherent row is selected first; individual payload bytes
 /// are replaced only when at least two receptions independently agree on a better
 /// odd-parity value. Singleton pages are retained; body rows must be present in
@@ -63,53 +65,80 @@ public static class RecoverySquasher
                 reportProgress?.Invoke("Filtering pages", index + 1, knownAddresses.Count);
         }
         var output = new List<byte[]>(addresses.Count * 20);
+        // Reserve even filtered source addresses: virtual subcodes must never
+        // collide with a real subpage present in the capture.
+        var reservedSubpages = knownAddresses.GroupBy(a => (a.magazine, a.page))
+            .ToDictionary(group => group.Key, group => group.Select(a => a.subpage).ToHashSet());
         for (int addressIndex = 0; addressIndex < addresses.Count; addressIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var address = addresses[addressIndex];
-            var versions = store.GetInstances(address.magazine, address.page, address.subpage);
+            var sourceVersions = store.GetInstances(address.magazine, address.page, address.subpage);
+            var variantGroups = options.SeparateContentVariants
+                ? RecoveryContentGroups.Split(sourceVersions, cancellationToken)
+                : new List<List<PageInstance>> { sourceVersions.ToList() };
 
-            for (int row = 0; row < 26; row++)
+            for (int variantIndex = 0; variantIndex < variantGroups.Count; variantIndex++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var candidates = versions
-                    .Select(instance => instance.Page.RawRows[row])
-                    .Where(raw => raw is { Length: 42 })
-                    .Select(raw => raw!)
+                var versions = variantGroups[variantIndex];
+                int outputSubpage = address.subpage;
+                if (variantIndex > 0)
+                {
+                    var reserved = reservedSubpages[(address.magazine, address.page)];
+                    outputSubpage = Enumerable.Range(1, 0x3F7F)
+                        .FirstOrDefault(value => (value & ~0x3F7F) == 0 && !reserved.Contains(value));
+                    if (outputSubpage == 0)
+                        throw new InvalidOperationException($"No free virtual subcodes remain for page {address.magazine}{address.page:X2}.");
+                    reserved.Add(outputSubpage);
+                }
+
+                for (int row = 0; row < 26; row++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var candidates = versions
+                        .Select(instance => instance.Page.RawRows[row])
+                        .Where(raw => raw is { Length: 42 })
+                        .Select(raw => raw!)
+                        .ToList();
+                    // Like vhs-teletext, vote on row presence before its contents.
+                    // Missing rows win ties, so an isolated stray packet cannot fill
+                    // a normally empty line. Explicitly transmitted blank rows still
+                    // participate in the byte consensus normally.
+                    if (row > 0 && !options.KeepInfrequentlyReceivedRows
+                        && candidates.Count <= versions.Count / 2)
+                        continue;
+                    if (candidates.Count > 0)
+                    {
+                        byte[] recovered = BuildConsensusRow(candidates, row, cancellationToken);
+                        if (row == 0 && outputSubpage != address.subpage)
+                            RewriteSubpage(recovered, outputSubpage);
+                        output.Add(recovered);
+                    }
+                }
+
+                foreach (var designationGroup in versions
+                             .SelectMany(instance => instance.Page.EnhancementPackets)
+                             .GroupBy(packet => packet.DesignationCode)
+                             .OrderBy(group => group.Key))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var selected = designationGroup
+                        .GroupBy(packet => Convert.ToHexString(packet.RawPacket))
+                        .OrderByDescending(group => group.Count())
+                        .ThenBy(group => EnhancementErrorCount(group.First()))
+                        .First()
+                        .First();
+                    output.Add((byte[])selected.RawPacket.Clone());
+                }
+
+                var fastextCandidates = versions
+                    .Select(instance => instance.Page.FastextPacket)
+                    .Where(packet => packet is { Length: 42 })
+                    .Select(packet => packet!)
                     .ToList();
-                // Like vhs-teletext, vote on row presence before its contents.
-                // Missing rows win ties, so an isolated stray packet cannot fill
-                // a normally empty line. Explicitly transmitted blank rows still
-                // participate in the byte consensus normally.
-                if (row > 0 && !options.KeepInfrequentlyReceivedRows
-                    && candidates.Count <= versions.Count / 2)
-                    continue;
-                if (candidates.Count > 0)
-                    output.Add(BuildConsensusRow(candidates, row, cancellationToken));
+                if (fastextCandidates.Count > 0)
+                    output.Add(BuildFastextConsensus(fastextCandidates, address.magazine, cancellationToken));
             }
-
-            foreach (var designationGroup in versions
-                         .SelectMany(instance => instance.Page.EnhancementPackets)
-                         .GroupBy(packet => packet.DesignationCode)
-                         .OrderBy(group => group.Key))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var selected = designationGroup
-                    .GroupBy(packet => Convert.ToHexString(packet.RawPacket))
-                    .OrderByDescending(group => group.Count())
-                    .ThenBy(group => EnhancementErrorCount(group.First()))
-                    .First()
-                    .First();
-                output.Add((byte[])selected.RawPacket.Clone());
-            }
-
-            var fastextCandidates = versions
-                .Select(instance => instance.Page.FastextPacket)
-                .Where(packet => packet is { Length: 42 })
-                .Select(packet => packet!)
-                .ToList();
-            if (fastextCandidates.Count > 0)
-                output.Add(BuildFastextConsensus(fastextCandidates, address.magazine, cancellationToken));
 
             if ((addressIndex & 0x0F) == 0 || addressIndex == addresses.Count - 1)
                 reportProgress?.Invoke("Recovering pages", addressIndex + 1, addresses.Count);
@@ -125,6 +154,19 @@ public static class RecoverySquasher
         }
 
         return output;
+    }
+
+    private static void RewriteSubpage(byte[] header, int subpage)
+    {
+        // S1-S4 share their bytes with C4-C6. Keep those control bits intact.
+        int low = Hamming.Decode84(header[4]).Value | (Hamming.Decode84(header[5]).Value << 4);
+        int high = Hamming.Decode84(header[6]).Value | (Hamming.Decode84(header[7]).Value << 4);
+        low = (low & 0x80) | (subpage & 0x7F);
+        high = (high & 0xC0) | ((subpage >> 8) & 0x3F);
+        header[4] = Hamming.Encode84(low & 15);
+        header[5] = Hamming.Encode84(low >> 4);
+        header[6] = Hamming.Encode84(high & 15);
+        header[7] = Hamming.Encode84(high >> 4);
     }
 
     private static byte[] BuildFastextConsensus(
