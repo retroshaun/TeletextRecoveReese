@@ -14,7 +14,9 @@ public sealed record VbiCaptureOptions(
     float SignalLevelThreshold = 64,
     float CriFcRangeThreshold = 28,
     double CriFcConfidenceThreshold = 0.35,
-    bool KeepEmptyPackets = false);
+    bool KeepEmptyPackets = false,
+    // Samples after resampling to eight samples per bit, matching vhs-teletext.
+    int ExtraRoll = 0);
 
 public readonly record struct VbiDeconvolutionProgress(
     long ProcessedLines,

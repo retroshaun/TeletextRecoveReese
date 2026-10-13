@@ -395,6 +395,7 @@ public partial class MainWindow : Window
         public bool? ShowVideoBookmarks { get; set; }
         public List<RecentFileEntry> RecentFiles { get; set; } = new();
         public List<CaptureCardPreset> CustomCaptureCardPresets { get; set; } = new();
+        public int? VbiExtraRoll { get; set; }
         public string? LastCaptureCardPresetName { get; set; }
         public string? LastLiveCaptureInterface { get; set; }
         public int? LastLiveCaptureInput { get; set; }
@@ -4810,6 +4811,7 @@ public partial class MainWindow : Window
         var refreshButton = new Button { Content = "Refresh", Width = 90 };
         var useButton = new Button { Content = "Start capture", Width = 110, IsDefault = true };
         var cancelButton = new Button { Content = "Cancel", Width = 90, IsCancel = true };
+        var extraRoll = CreateVbiExtraRollControl();
         var recordRawVbiCheckBox = new CheckBox
         {
             Content = "Write raw VBI to temp file to save later",
@@ -4897,6 +4899,7 @@ public partial class MainWindow : Window
                     statusText,
                     previewBorder,
                     previewStatusText,
+                    CreateVbiExtraRollPanel(extraRoll),
                     recordRawVbiCheckBox,
                     keepEmptyPacketsCheckBox,
                     new Grid
@@ -5319,6 +5322,7 @@ public partial class MainWindow : Window
                 return;
             if (!preset.IsAutoDetected)
                 _sessionState.LastCaptureCardPresetName = preset.Name;
+            _sessionState.VbiExtraRoll = (int)(extraRoll.Value ?? 0);
             _sessionState.LastLiveCaptureInterface = captureInterface.Path;
             _sessionState.LastLiveCaptureInput = captureInput?.Index ?? directShowInput?.PinIndex;
             _sessionState.LastLiveCaptureStandard = captureStandard?.Id
@@ -5439,7 +5443,8 @@ public partial class MainWindow : Window
                 SignalLevelThreshold: resolvedPreset.SignalLevelThreshold,
                 CriFcRangeThreshold: resolvedPreset.CriFcRangeThreshold,
                 CriFcConfidenceThreshold: resolvedPreset.CriFcConfidenceThreshold,
-                KeepEmptyPackets: keepEmptyPackets);
+                KeepEmptyPackets: keepEmptyPackets,
+                ExtraRoll: _sessionState.VbiExtraRoll ?? 0);
             string temporaryOutput = Path.Combine(
                 Path.GetTempPath(), $"TeletextRecoveReese-live-{Guid.NewGuid():N}.t42");
             string? temporaryRawCapture = recordRawVbi
@@ -7581,6 +7586,7 @@ public partial class MainWindow : Window
 
         CaptureCardPreset? preset = await ShowVbiPresetSelectionAsync();
         if (preset is null) return;
+        int extraRoll = _sessionState.VbiExtraRoll ?? 0;
         bool showLivePreview = _sessionState.ShowLiveDeconvolvedPage ?? true;
         _sessionState.LastCaptureCardPresetName = preset.Name;
         SaveSessionState();
@@ -7737,7 +7743,8 @@ public partial class MainWindow : Window
                     preset.FieldRangeStart, preset.FieldRangeEnd,
                     preset.StandardDeviationThreshold,
                     preset.SignalLevelThreshold, preset.CriFcRangeThreshold,
-                    preset.CriFcConfidenceThreshold);
+                    preset.CriFcConfidenceThreshold,
+                    ExtraRoll: extraRoll);
                 result = await VbiDeconvolutionEngine.DeconvolveAsync(
                     input, output, options, reporter, packetReporter, cancellation.Token);
             }
@@ -7886,10 +7893,39 @@ public partial class MainWindow : Window
         return value.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
     }
 
+    private NumericUpDown CreateVbiExtraRollControl() => new()
+    {
+        Minimum = -8,
+        Maximum = 8,
+        Increment = 1,
+        FormatString = "0",
+        Value = Math.Clamp(_sessionState.VbiExtraRoll ?? 0, -8, 8),
+        Width = 120,
+        HorizontalAlignment = HorizontalAlignment.Left,
+    };
+
+    private static StackPanel CreateVbiExtraRollPanel(NumericUpDown control) => new()
+    {
+        Spacing = 6,
+        Children =
+        {
+            new TextBlock { Text = "Extra roll (samples)", FontWeight = FontWeight.SemiBold },
+            control,
+            new TextBlock
+            {
+                Text = "Fine sampling shift after packet lock, like vhs-teletext --extra-roll. " +
+                       "8 samples = 1 bit; positive values sample later. Default: 0. Try −2 to +4.",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.LightGray,
+            },
+        },
+    };
+
     private async Task<CaptureCardPreset?> ShowVbiPresetSelectionAsync()
     {
         _sessionState.CustomCaptureCardPresets ??= new List<CaptureCardPreset>();
         List<CaptureCardPreset> presets = BuiltInCaptureCardPresets.Concat(_sessionState.CustomCaptureCardPresets).ToList();
+        var extraRoll = CreateVbiExtraRollControl();
         var combo = new ComboBox { Width = 420, ItemsSource = presets };
         combo.SelectedItem = presets.FirstOrDefault(p => string.Equals(p.Name, _sessionState.LastCaptureCardPresetName, StringComparison.OrdinalIgnoreCase))
                              ?? presets.FirstOrDefault();
@@ -7921,6 +7957,7 @@ public partial class MainWindow : Window
                     new TextBlock { Text = "Capture card configuration", FontSize = 16, FontWeight = FontWeight.SemiBold },
                     combo,
                     details,
+                    CreateVbiExtraRollPanel(extraRoll),
                     new StackPanel
                     {
                         Orientation = Orientation.Horizontal,
@@ -7935,7 +7972,10 @@ public partial class MainWindow : Window
         openButton.Click += (_, _) =>
         {
             if (combo.SelectedItem is CaptureCardPreset selected)
+            {
                 result = selected;
+                _sessionState.VbiExtraRoll = (int)(extraRoll.Value ?? 0);
+            }
             dialog.Close();
         };
         cancelButton.Click += (_, _) => dialog.Close();

@@ -446,6 +446,7 @@ public static class VbiDeconvolutionEngine
                     clippedStart * bitWidth / 8.0);
                 return new PreparedLine(Array.Empty<float>(), null);
             }
+            clippedStart += options.ExtraRoll;
             PreparedLine? clipped = BuildPreparedLine(
                 resampled, plan.Length, clippedStart, bitWidth,
                 manualPacketSpanSamples, clippedLow, clippedHigh,
@@ -618,6 +619,9 @@ public static class VbiDeconvolutionEngine
             return new PreparedLine(Array.Empty<float>(), null);
         }
 
+        // Apply the manual phase correction only after locking and validation.
+        // Keep automatic clock-search detection independent of this correction.
+        bestStart += options.ExtraRoll;
         PreparedLine? preparedLine = BuildPreparedLine(
             resampled, plan.Length, bestStart, bitWidth,
             manualPacketSpanSamples, null, null,
