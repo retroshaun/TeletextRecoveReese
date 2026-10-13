@@ -4822,12 +4822,12 @@ public partial class MainWindow : Window
             "Keeps the complete raw sample stream so it can be saved when capture stops");
         var keepEmptyPacketsCheckBox = new CheckBox
         {
-            Content = "Preserve every VBI line in decoded T42 (line-aware)",
+            Content = "Preserve capture timing",
             IsChecked = _sessionState.KeepEmptyLiveCapturePackets == true,
         };
         ToolTip.SetTip(
             keepEmptyPacketsCheckBox,
-            "Writes a 42-byte zero placeholder when a VBI line cannot be decoded, compatible with vhs-teletext --keep-empty");
+            "Keeps an output record for every captured line, including lines that could not be decoded");
         var dialog = new Window
         {
             Title = "Live VBI capture",
@@ -7900,23 +7900,37 @@ public partial class MainWindow : Window
         Increment = 1,
         FormatString = "0",
         Value = Math.Clamp(_sessionState.VbiExtraRoll ?? 0, -8, 8),
-        Width = 120,
+        Width = 128,
+        Height = 34,
         HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalAlignment = VerticalAlignment.Center,
     };
 
-    private static StackPanel CreateVbiExtraRollPanel(NumericUpDown control) => new()
+    private static Grid CreateVbiExtraRollPanel(NumericUpDown control) => new()
     {
-        Spacing = 6,
+        Margin = new Thickness(0, 4),
+        ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
+        ColumnSpacing = 12,
         Children =
         {
-            new TextBlock { Text = "Extra roll (samples)", FontWeight = FontWeight.SemiBold },
-            control,
             new TextBlock
             {
-                Text = "Fine sampling shift after packet lock, like vhs-teletext --extra-roll. " +
-                       "8 samples = 1 bit; positive values sample later. Default: 0. Try −2 to +4.",
+                Text = "Sampling offset",
+                FontWeight = FontWeight.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+            new Border
+            {
+                [Grid.ColumnProperty] = 1,
+                Child = control,
+            },
+            new TextBlock
+            {
+                [Grid.ColumnProperty] = 2,
+                Text = "Fine-tunes signal alignment. Positive values sample later.",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.LightGray,
+                VerticalAlignment = VerticalAlignment.Center,
             },
         },
     };
