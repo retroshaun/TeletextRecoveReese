@@ -4464,7 +4464,7 @@ public partial class MainWindow : Window
             AllowMultiple = false,
             FileTypeFilter = new[]
             {
-                new FilePickerFileType("Teletext files") { Patterns = new[] { "*.tti", "*.t42" } },
+                new FilePickerFileType("T42 teletext captures") { Patterns = new[] { "*.t42" } },
                 FilePickerFileTypes.All
             }
         });
@@ -4714,10 +4714,12 @@ public partial class MainWindow : Window
         return result;
     }
 
+    private bool _openingDroppedFile;
+
     private void OnTeletextGridDragOver(object? sender, DragEventArgs e)
     {
         bool hasFile = e.DataTransfer.TryGetFiles()?.OfType<IStorageFile>().Any() == true;
-        e.DragEffects = hasFile ? DragDropEffects.Copy : DragDropEffects.None;
+        e.DragEffects = hasFile && !_openingDroppedFile ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
     }
 
@@ -4725,16 +4727,29 @@ public partial class MainWindow : Window
     {
         e.Handled = true;
         IStorageFile? file = e.DataTransfer.TryGetFiles()?.OfType<IStorageFile>().FirstOrDefault();
-        if (file is null) return;
-
-        bool broadcast = ReferenceEquals(sender, BroadcastGrid);
+        if (file is null || _openingDroppedFile) return;
+        _openingDroppedFile = true;
         try
         {
             string displayPath = file.Path.IsFile ? file.Path.LocalPath : file.Path.ToString();
+            CaptureFileKind kind;
+            await using (var probe = await file.OpenReadAsync())
+                kind = await Task.Run(() => CaptureFileDetector.DetectAsync(probe, file.Name));
+            if (kind == CaptureFileKind.Unknown)
+            {
+                await ShowMessageAsync("Could not identify dropped file",
+                    "No T42 packet stream was detected. Raw VBI captures should use a .vbi or .tbc extension.");
+                return;
+            }
+            if (kind == CaptureFileKind.RawVbi)
+            {
+                await OpenVbiCaptureFileAsync(file);
+                return;
+            }
             CaptureRecentFilePositions();
             await using var stream = await file.OpenReadAsync();
 
-            if (broadcast)
+            if (kind == CaptureFileKind.FullBroadcast)
             {
                 await LoadBroadcastStreamAsync(stream, displayPath);
                 await RememberFileAsync(
@@ -4752,6 +4767,10 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             await ShowMessageAsync("Could not open dropped file", ex.Message);
+        }
+        finally
+        {
+            _openingDroppedFile = false;
         }
     }
 
@@ -7620,6 +7639,11 @@ public partial class MainWindow : Window
         });
         IStorageFile? file = files.Count > 0 ? files[0] : null;
         if (file is null) return;
+        await OpenVbiCaptureFileAsync(file);
+    }
+
+    private async Task OpenVbiCaptureFileAsync(IStorageFile file)
+    {
         if (!file.Path.IsFile)
         {
             await ShowMessageAsync("Open VBI capture", "VBI deconvolution currently requires a local file.");
@@ -8051,7 +8075,7 @@ public partial class MainWindow : Window
             AllowMultiple = false,
             FileTypeFilter = new[]
             {
-                new FilePickerFileType("Teletext files") { Patterns = new[] { "*.tti", "*.t42" } },
+                new FilePickerFileType("T42 teletext captures") { Patterns = new[] { "*.t42" } },
                 FilePickerFileTypes.All
             }
         });

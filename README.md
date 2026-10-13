@@ -78,6 +78,11 @@ The editor uses one or two synchronized panes:
 - Undo and redo independently for each restored page.
 - Add or delete pages and subpages.
 - Jump between matching pages in the two panes.
+- Drop a file anywhere in the window to open it automatically: single/squashed
+  T42 in the editable pane, repeated-page T42 in the full broadcast pane,
+  and raw `.vbi`/`.tbc` captures in deconvolution. T42 detection scans packet
+  headers without assembling pages and stops when an address repeats. VBI drops
+  always show the capture preset and sampling-offset chooser before deconvolution.
 
 ## Text, attributes, and mosaics
 

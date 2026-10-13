@@ -7,7 +7,10 @@
         SizeToContent="WidthAndHeight"
         CanResize="False"
         Background="{DynamicResource AppBackgroundBrush}"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        DragDrop.AllowDrop="True"
+        DragDrop.DragOver="OnTeletextGridDragOver"
+        DragDrop.Drop="OnTeletextGridDrop">
 
     <NativeMenu.Menu>
         <NativeMenu>
