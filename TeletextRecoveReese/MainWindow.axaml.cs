@@ -1258,7 +1258,7 @@ public partial class MainWindow : Window
                 : string.Equals(_sessionState.Theme, "Automatic", StringComparison.Ordinal) ? 2
                 : 0,
         };
-        int[] uiScalePercentages = [100, 125, 150, 175, 200];
+        int[] uiScalePercentages = [75, 100, 125, 150, 175, 200];
         int savedUiScale = NormalizeUiScalePercent(_sessionState.UiScalePercent ?? 100);
         var uiScale = new ComboBox
         {
@@ -1457,7 +1457,7 @@ public partial class MainWindow : Window
 
     private static int NormalizeUiScalePercent(int value)
     {
-        int clamped = Math.Clamp(value, 100, 200);
+        int clamped = Math.Clamp(value, 75, 200);
         return 100 + (int)Math.Round((clamped - 100) / 25.0) * 25;
     }
 

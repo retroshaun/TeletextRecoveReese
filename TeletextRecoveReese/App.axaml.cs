@@ -20,7 +20,7 @@ public class App : Application
         if (window.Classes.Contains("application-ui-scaled")) return;
         window.Classes.Add("application-ui-scaled");
 
-        double scale = Math.Clamp(UiScalePercent, 100, 200) / 100.0;
+        double scale = Math.Clamp(UiScalePercent, 75, 200) / 100.0;
         if (Math.Abs(scale - 1.0) < 0.001 || window.Content is not Control content)
             return;
 
