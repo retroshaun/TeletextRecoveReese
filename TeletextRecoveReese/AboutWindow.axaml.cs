@@ -281,7 +281,7 @@ public sealed class TerminatorTitleControl : Control
             return;
 
         const string label = "VERSION:";
-        const string value = "0.9 BETA";
+        string value = AppVersion.AboutVersion;
         int labelCharacters = Math.Min(
             label.Length,
             (int)Math.Ceiling(Math.Clamp(elapsed / VersionLabelSeconds, 0, 1) * label.Length));

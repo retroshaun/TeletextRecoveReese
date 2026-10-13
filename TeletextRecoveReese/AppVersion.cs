@@ -21,4 +21,15 @@ internal static class AppVersion
         .Replace('-', ' ');
 
     public static string DisplayName => $"{ProductName} {DisplayVersion}";
+
+    public static string AboutVersion
+    {
+        get
+        {
+            string[] parts = InformationalVersion.Split('+', 2);
+            string revision = parts.Length > 1 ? parts[1] : "unknown";
+            string shortRevision = revision[..System.Math.Min(7, revision.Length)];
+            return $"{DisplayVersion} ({shortRevision})";
+        }
+    }
 }

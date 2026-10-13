@@ -10,13 +10,15 @@ public sealed class RecoverySquashOptions
     public int MinimumReceptions { get; init; } = 1;
     public bool RequireServiceHeader { get; init; } = true;
     public int MinimumHeaderSimilarityPercent { get; init; } = 60;
+    public bool KeepInfrequentlyReceivedRows { get; init; }
 }
 
 /// <summary>
 /// Builds one recovery page per address from every occurrence in a broadcast.
 /// A complete, internally coherent row is selected first; individual payload bytes
 /// are replaced only when at least two receptions independently agree on a better
-/// odd-parity value. Singleton pages and singleton rows are always retained.
+/// odd-parity value. Singleton pages are retained; body rows must be present in
+/// most receptions unless KeepInfrequentlyReceivedRows is enabled.
 /// </summary>
 public static class RecoverySquasher
 {
@@ -75,6 +77,13 @@ public static class RecoverySquasher
                     .Where(raw => raw is { Length: 42 })
                     .Select(raw => raw!)
                     .ToList();
+                // Like vhs-teletext, vote on row presence before its contents.
+                // Missing rows win ties, so an isolated stray packet cannot fill
+                // a normally empty line. Explicitly transmitted blank rows still
+                // participate in the byte consensus normally.
+                if (row > 0 && !options.KeepInfrequentlyReceivedRows
+                    && candidates.Count <= versions.Count / 2)
+                    continue;
                 if (candidates.Count > 0)
                     output.Add(BuildConsensusRow(candidates, row, cancellationToken));
             }

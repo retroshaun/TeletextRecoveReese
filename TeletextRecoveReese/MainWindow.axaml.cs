@@ -11191,6 +11191,11 @@ public partial class MainWindow : Window
         {
             Minimum = 1, Maximum = 1000, Value = 1, Width = 150,
         };
+        var keepInfrequentlyReceivedRows = new CheckBox
+        {
+            Content = "Keep infrequently received rows",
+            IsChecked = false,
+        };
         var requireServiceHeader = new CheckBox
         {
             Content = "Require service-name header match",
@@ -11255,6 +11260,13 @@ public partial class MainWindow : Window
                         Children = { limitSubpages, maximumSubpage, new TextBlock { Text = "(decimal)", VerticalAlignment = VerticalAlignment.Center } },
                     },
                     standardPages,
+                    keepInfrequentlyReceivedRows,
+                    new TextBlock
+                    {
+                        Text = "By default, text rows are kept only when present in more than half of the page receptions. Enable this to also recover rare rows, which may include stray content on normally empty lines.",
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = Brushes.LightGray,
+                    },
                     new StackPanel
                     {
                         Orientation = Orientation.Horizontal,
@@ -11304,6 +11316,7 @@ public partial class MainWindow : Window
                     : null,
                 StandardDecimalPagesOnly = standardPages.IsChecked == true,
                 MinimumReceptions = (int)(minimumReceptions.Value ?? 1),
+                KeepInfrequentlyReceivedRows = keepInfrequentlyReceivedRows.IsChecked == true,
                 RequireServiceHeader = requireServiceHeader.IsChecked == true,
                 MinimumHeaderSimilarityPercent = (int)(headerSimilarity.Value ?? 60),
             };

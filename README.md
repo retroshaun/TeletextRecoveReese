@@ -100,6 +100,9 @@ The editor uses one or two synchronized panes:
 
 - Create a squashed stream directly from an open full broadcast using filters.
 - Build consensus rows from repeated receptions and parity quality.
+- By default, keep text rows only when present in more than half of the page
+  receptions, matching `vhs-teletext` row-presence voting. Enable **Keep
+  infrequently received rows** in the squash dialog to retain rare rows too.
 - Preserve X/26 packets selected from the available versions.
 - Optionally keep every live-capture VBI line as a vhs-teletext-compatible
   all-zero T42 slot when no packet can be recovered.
@@ -200,7 +203,7 @@ dotnet run --project TeletextRecoveReese -- -startnew
 
 ## Status
 
-- Current development version: **0.9 beta**
+- Current development version: **0.9.1**
 - Actively developed and used for real restoration work.
 - Core `.t42` loading, comparison, editing, squashing, and export are available.
 - Complete EN 300 706 coverage and broader interoperability testing are ongoing.
