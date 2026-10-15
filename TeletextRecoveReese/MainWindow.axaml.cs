@@ -396,6 +396,7 @@ public partial class MainWindow : Window
         public List<RecentFileEntry> RecentFiles { get; set; } = new();
         public List<CaptureCardPreset> CustomCaptureCardPresets { get; set; } = new();
         public int? VbiExtraRoll { get; set; }
+        public bool? VbiAdvancedMode { get; set; }
         public string? LastCaptureCardPresetName { get; set; }
         public string? LastLiveCaptureInterface { get; set; }
         public int? LastLiveCaptureInput { get; set; }
@@ -5442,12 +5443,19 @@ public partial class MainWindow : Window
         LinuxV4l2Input? linuxInput,
         LinuxV4l2Standard? linuxStandard,
         DirectShowVideoInput? directShowInput,
-        DirectShowVideoStandard? directShowStandard)
+        DirectShowVideoStandard? directShowStandard,
+        string? sourceFilePath = null)
     {
+        bool fileMode = sourceFilePath is not null;
         LiveVbiCaptureStream? input = null;
         try
         {
-            if (OperatingSystem.IsLinux() && linuxInput is not null && linuxStandard is not null)
+            if (fileMode)
+                input = new FileVbiCaptureStream(sourceFilePath!, new VbiCaptureOptions(
+                    preset.Name, preset.SampleRate, preset.LineLength, preset.LineStart,
+                    preset.LineStartEnd, preset.SampleType == "UInt16", preset.FieldLines,
+                    preset.FieldRangeStart, preset.FieldRangeEnd));
+            else if (OperatingSystem.IsLinux() && linuxInput is not null && linuxStandard is not null)
                 input = new LinuxVbiCaptureStream(
                     captureInterface.Path, linuxInput.Index, linuxStandard.Id);
             else if (OperatingSystem.IsWindows() && directShowInput is not null && directShowStandard is not null)
@@ -5476,7 +5484,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            await ShowMessageAsync("Could not open live VBI capture", ex.Message);
+            await ShowMessageAsync(fileMode ? "Could not open VBI capture" : "Could not open live VBI capture", ex.Message);
             return;
         }
 
@@ -5489,11 +5497,11 @@ public partial class MainWindow : Window
             preset = resolvedPreset;
             var options = new VbiCaptureOptions(
                 resolvedPreset.Name,
-                input.SamplingRate,
+                fileMode ? preset.SampleRate : input.SamplingRate,
                 input.SamplesPerLine,
                 resolvedPreset.LineStart,
                 resolvedPreset.LineStartEnd,
-                IsUInt16: false,
+                IsUInt16: fileMode && preset.SampleType == "UInt16",
                 FieldLines: input.LinesPerFrame,
                 FieldRangeStart: 0,
                 FieldRangeEnd: input.LinesPerFrame,
@@ -5503,6 +5511,8 @@ public partial class MainWindow : Window
                 CriFcConfidenceThreshold: resolvedPreset.CriFcConfidenceThreshold,
                 KeepEmptyPackets: keepEmptyPackets,
                 ExtraRoll: _sessionState.VbiExtraRoll ?? 0);
+            // Preview pixels use eight-bit levels; decoding retains the source precision.
+            var previewOptions = options with { IsUInt16 = false };
             string temporaryOutput = Path.Combine(
                 Path.GetTempPath(), $"TeletextRecoveReese-live-{Guid.NewGuid():N}.t42");
             string? temporaryRawCapture = recordRawVbi
@@ -5578,7 +5588,7 @@ public partial class MainWindow : Window
             };
             const int videoPreviewWidth = 240;
             const int videoPreviewHeight = 180;
-            bool disableVideoPreview = _sessionState.DisableLiveVbiVideoPreview ?? false;
+            bool disableVideoPreview = fileMode || (_sessionState.DisableLiveVbiVideoPreview ?? false);
             var videoPreviewBitmap = new WriteableBitmap(
                 new PixelSize(videoPreviewWidth, videoPreviewHeight),
                 new Vector(96, 96),
@@ -5669,7 +5679,7 @@ public partial class MainWindow : Window
             };
             var runDeconvolutionCheckBox = new CheckBox
             {
-                Content = "Live deconvolution",
+                Content = fileMode ? "Deconvolution (pause/resume)" : "Live deconvolution",
                 IsChecked = true,
             };
             var deconvolutionControl = new ToggleableDeconvolutionControl(
@@ -5678,7 +5688,7 @@ public partial class MainWindow : Window
                 _sessionState.LiveCaptureNoTeletextTimeoutMinutes ?? 5,
                 1, 30);
             int? activeNoTeletextTimeoutMinutes =
-                _sessionState.AutoStopLiveCaptureOnNoTeletext == true
+                !fileMode && _sessionState.AutoStopLiveCaptureOnNoTeletext == true
                     ? configuredNoTeletextTimeoutMinutes
                     : null;
             long lastDecodedPacketCount = 0;
@@ -6015,13 +6025,13 @@ public partial class MainWindow : Window
             long fpsBaselineTimestamp = Stopwatch.GetTimestamp();
             var stopButton = new Button
             {
-                Content = "Stop capture",
+                Content = fileMode ? "Abort" : "Stop capture",
                 Width = 110,
                 HorizontalAlignment = HorizontalAlignment.Right,
             };
             var dialog = new Window
             {
-                Title = "Live VBI capture",
+                Title = fileMode ? $"Deconvolving VBI capture — {captureInterface.Name}" : "Live VBI capture",
                 Height = Math.Clamp(ClientSize.Height - 80, 520, 700),
                 SizeToContent = SizeToContent.Width,
                 CanResize = false,
@@ -6074,6 +6084,7 @@ public partial class MainWindow : Window
                                                     new TextBlock
                                                     {
                                                         Text = "Video input",
+                                                        IsVisible = !fileMode,
                                                         FontWeight = FontWeight.SemiBold,
                                                     },
                                                     videoPreviewBorder,
@@ -6099,6 +6110,17 @@ public partial class MainWindow : Window
                     },
                 },
             };
+            videoPreviewBorder.IsVisible = !fileMode;
+            videoPreviewInfoText.IsVisible = !fileMode;
+            showVideoPreviewCheckBox.IsVisible = !fileMode;
+            liveAutoStopNoTeletextPanel.IsVisible = !fileMode;
+            if (fileMode)
+            {
+                progressBar.IsIndeterminate = false;
+                progressBar.Minimum = 0;
+                progressBar.Maximum = 100;
+                phaseText.Text = "Preparing file deconvolution…";
+            }
             bool allowClose = false;
             bool autoStoppedForNoTeletext = false;
             bool rawPreviewActive = true;
@@ -6152,9 +6174,11 @@ public partial class MainWindow : Window
                 Interlocked.Exchange(ref lastRawPreviewTimestamp, 0);
                 UpdateClockBank();
             };
+            byte[]? latestFileRawFrame = null;
             input.RawFrameCaptured = rawFrame =>
             {
                 if (!rawPreviewActive) return;
+                if (fileMode) Volatile.Write(ref latestFileRawFrame, rawFrame);
                 int firstFieldTrackedMask =
                     Volatile.Read(ref autoTrackFirstFieldLineMask);
                 int secondFieldTrackedMask =
@@ -6224,7 +6248,7 @@ public partial class MainWindow : Window
                                         lineCount * input.SamplesPerLine).ToArray();
                                 int?[] detectedOffsets =
                                     VbiDeconvolutionEngine.FindClockRunInOffsets(
-                                        fieldFrame, options,
+                                        fieldFrame, previewOptions,
                                         Math.Min(lineCount, adjustableLineCount),
                                         maximumOffsetSamples: input.SamplesPerLine / 2,
                                         lineMask: trackedMask);
@@ -6342,7 +6366,7 @@ public partial class MainWindow : Window
                                 previewLineCount * input.SamplesPerLine).ToArray();
                         VbiLineTiming?[] lineTimings =
                             VbiDeconvolutionEngine.FindLineTimings(
-                                timingFrame, options, clockSearchOffsets,
+                                timingFrame, previewOptions, clockSearchOffsets,
                                 manualPacketSpanSamples,
                                 previewLineCount, timingLineMask);
                         int[] detectedClockStarts = Enumerable.Range(0, previewLineCount)
@@ -6420,6 +6444,23 @@ public partial class MainWindow : Window
                     }
                 });
             };
+            // Re-analyse the frozen file frame while paused so field selection,
+            // CRI tracking and endpoint changes are visible before decoding starts.
+            var pausedFilePreviewTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(100),
+            };
+            pausedFilePreviewTimer.Tick += (_, _) =>
+            {
+                if (fileMode && !deconvolutionControl.Enabled
+                    && Volatile.Read(ref latestFileRawFrame) is { } frame)
+                    input.RawFrameCaptured?.Invoke(frame);
+            };
+            if (fileMode)
+            {
+                dialog.Opened += (_, _) => pausedFilePreviewTimer.Start();
+                dialog.Closed += (_, _) => pausedFilePreviewTimer.Stop();
+            }
             resetAllClockOffsetsButton.Click += (_, _) =>
             {
                 Volatile.Write(ref autoTrackFirstFieldLineMask, 0);
@@ -6527,7 +6568,7 @@ public partial class MainWindow : Window
                 // closing the device guarantees that Stop does not wait forever.
                 try { input.Dispose(); } catch { }
                 stopButton.IsEnabled = false;
-                phaseText.Text = "Stopping live capture…";
+                phaseText.Text = fileMode ? "Aborting…" : "Stopping live capture…";
             }
             dialog.Closing += (_, args) =>
             {
@@ -6572,6 +6613,10 @@ public partial class MainWindow : Window
                 // This controls only CPU/OpenCL work. Video preview has its own
                 // independent pipe controlled by showVideoPreviewCheckBox.
                 deconvolutionControl.Enabled = runDeconvolutionCheckBox.IsChecked == true;
+                if (fileMode)
+                    phaseText.Text = deconvolutionControl.Enabled
+                        ? "Deconvolving file…"
+                        : "File deconvolution paused";
                 lastDecodedPacketTimestamp = Stopwatch.GetTimestamp();
                 Interlocked.Exchange(ref fpsBaselineFrames, input.CapturedFrames);
                 Interlocked.Exchange(ref fpsBaselineTimestamp, Stopwatch.GetTimestamp());
@@ -6888,10 +6933,15 @@ public partial class MainWindow : Window
                     : 0;
                 if (!autoStoppedForNoTeletext)
                 {
-                    phaseText.Text = deconvolutionControl.Enabled
+                    phaseText.Text = fileMode
+                        ? deconvolutionControl.Enabled
+                            ? $"Deconvolving file — {value.Percent:0.0}%"
+                            : "File deconvolution paused"
+                        : deconvolutionControl.Enabled
                         ? $"Live deconvolution — {captureFps:0.0} fps"
                         : $"Capture only — {captureFps:0.0} fps";
                 }
+                if (fileMode) progressBar.Value = value.Percent;
                 string headerDiagnostics = liveAssembler is null
                     ? "Headers waiting…"
                     : $"Headers {liveAssembler.HeaderPacketsAccepted:N0} ok / {liveAssembler.HeaderPacketsRejected:N0} rejected   " +
@@ -6993,8 +7043,13 @@ public partial class MainWindow : Window
                         SaveSessionState();
                     }
                 }
-                LiveCaptureCompletionChoice completionChoice =
-                    await ShowLiveCaptureCompletionDialogAsync(
+                LiveCaptureCompletionChoice completionChoice = fileMode
+                    ? cancellation.IsCancellationRequested
+                        ? packetCount > 0 && await ConfirmOpenPartialVbiAsync(packetCount)
+                            ? LiveCaptureCompletionChoice.OpenDecoded
+                            : LiveCaptureCompletionChoice.Discard
+                        : LiveCaptureCompletionChoice.OpenDecoded
+                    : await ShowLiveCaptureCompletionDialogAsync(
                         temporaryRawCapture, packetCount,
                         autoStoppedForNoTeletext ? activeNoTeletextTimeoutMinutes : null);
                 if (completionChoice == LiveCaptureCompletionChoice.Discard)
@@ -7004,12 +7059,12 @@ public partial class MainWindow : Window
                     && failure is not OperationCanceledException
                     && !cancellation.IsCancellationRequested)
                 {
-                    await ShowMessageAsync("Live VBI capture failed", failure.Message);
+                    await ShowMessageAsync(fileMode ? "VBI deconvolution failed" : "Live VBI capture failed", failure.Message);
                     return;
                 }
                 if (packetCount <= 0)
                 {
-                    await ShowMessageAsync("Live VBI capture", "Capture stopped without recovering any Teletext packets.");
+                    await ShowMessageAsync(fileMode ? "VBI deconvolution" : "Live VBI capture", "No Teletext packets were recovered. Check the capture-card preset and input format.");
                     return;
                 }
 
@@ -7024,7 +7079,9 @@ public partial class MainWindow : Window
                 UpdateWindowAndPaneTitles();
                 SaveSessionState();
 
-                if (await ConfirmSaveLiveDecodedCaptureAsync(packetCount))
+                if (fileMode)
+                    await SaveOpenedLiveDecodedCaptureAsync(temporaryOutput, sourceFilePath);
+                else if (await ConfirmSaveLiveDecodedCaptureAsync(packetCount))
                     await SaveOpenedLiveDecodedCaptureAsync(temporaryOutput);
             }
             finally
@@ -7650,14 +7707,23 @@ public partial class MainWindow : Window
             return;
         }
 
-        CaptureCardPreset? preset = await ShowVbiPresetSelectionAsync();
-        if (preset is null) return;
+        var selection = await ShowVbiPresetSelectionAsync();
+        if (selection is null) return;
+        CaptureCardPreset preset = selection.Value.Preset;
         int extraRoll = _sessionState.VbiExtraRoll ?? 0;
         bool showLivePreview = _sessionState.ShowLiveDeconvolvedPage ?? true;
         _sessionState.LastCaptureCardPresetName = preset.Name;
         SaveSessionState();
 
         string inputPath = file.Path.LocalPath;
+        if (selection.Value.AdvancedMode)
+        {
+            await StartLiveVbiCaptureAsync(
+                new LiveCaptureInterface(Path.GetFileName(inputPath), inputPath, "File"),
+                preset, null, false, _sessionState.KeepEmptyLiveCapturePackets ?? false,
+                null, null, null, null, inputPath);
+            return;
+        }
         string temporaryOutput = Path.Combine(Path.GetTempPath(), $"TeletextRecoveReese-{Guid.NewGuid():N}.t42");
         using var cancellation = new CancellationTokenSource();
         var phaseText = new TextBlock { Text = "Preparing OpenCL deconvolution…", TextWrapping = TextWrapping.Wrap };
@@ -8001,7 +8067,7 @@ public partial class MainWindow : Window
         },
     };
 
-    private async Task<CaptureCardPreset?> ShowVbiPresetSelectionAsync()
+    private async Task<(CaptureCardPreset Preset, bool AdvancedMode)?> ShowVbiPresetSelectionAsync()
     {
         _sessionState.CustomCaptureCardPresets ??= new List<CaptureCardPreset>();
         List<CaptureCardPreset> presets = BuiltInCaptureCardPresets.Concat(_sessionState.CustomCaptureCardPresets).ToList();
@@ -8019,6 +8085,11 @@ public partial class MainWindow : Window
                 $"Thresholds: std-dev {p.StandardDeviationThreshold:0.##} · signal {p.SignalLevelThreshold:0.##} · CRI/FC range {p.CriFcRangeThreshold:0.##} · confidence {p.CriFcConfidenceThreshold:0.##}";
         }
         combo.SelectionChanged += (_, _) => UpdateDetails();
+        var advancedMode = new CheckBox
+        {
+            Content = "Advanced mode",
+            IsChecked = _sessionState.VbiAdvancedMode ?? false,
+        };
         var openButton = new Button { Content = "Deconvolve", Width = 105, IsDefault = true };
         var cancelButton = new Button { Content = "Cancel", Width = 90, IsCancel = true };
         var dialog = new Window
@@ -8038,23 +8109,32 @@ public partial class MainWindow : Window
                     combo,
                     details,
                     CreateVbiExtraRollPanel(extraRoll),
-                    new StackPanel
+                    new Grid
                     {
-                        Orientation = Orientation.Horizontal,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        Spacing = 8,
-                        Children = { cancelButton, openButton },
+                        ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                        Children =
+                        {
+                            advancedMode,
+                            new StackPanel
+                            {
+                                [Grid.ColumnProperty] = 1,
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 8,
+                                Children = { cancelButton, openButton },
+                            },
+                        },
                     },
                 },
             },
         };
-        CaptureCardPreset? result = null;
+        (CaptureCardPreset Preset, bool AdvancedMode)? result = null;
         openButton.Click += (_, _) =>
         {
             if (combo.SelectedItem is CaptureCardPreset selected)
             {
-                result = selected;
+                result = (selected, advancedMode.IsChecked == true);
                 _sessionState.VbiExtraRoll = (int)(extraRoll.Value ?? 0);
+                _sessionState.VbiAdvancedMode = advancedMode.IsChecked == true;
             }
             dialog.Close();
         };
@@ -12170,16 +12250,18 @@ public partial class MainWindow : Window
         return save;
     }
 
-    private async Task SaveOpenedLiveDecodedCaptureAsync(string temporaryOutput)
+    private async Task SaveOpenedLiveDecodedCaptureAsync(string temporaryOutput, string? sourceFilePath = null)
     {
         _broadcastStreamIdentity = AnalyzeTeletextStreamIdentity(_broadcastPackets);
         IStorageFile? destination = await SaveFilePickerRememberingFolderAsync(
             new FilePickerSaveOptions
             {
-                Title = "Save decoded live capture",
+                Title = sourceFilePath is null ? "Save decoded live capture" : "Save deconvolved T42 capture (Cancel to keep Untitled)",
                 SuggestedFileName = SuggestedTeletextFileName(
                     _broadcastStreamIdentity,
-                    $"live-{DateTime.Now:yyyyMMdd-HHmmss}.t42"),
+                    sourceFilePath is null
+                        ? $"live-{DateTime.Now:yyyyMMdd-HHmmss}.t42"
+                        : $"{Path.GetFileNameWithoutExtension(sourceFilePath)}.t42"),
                 DefaultExtension = "t42",
                 FileTypeChoices = new[]
                 {
@@ -12198,6 +12280,13 @@ public partial class MainWindow : Window
             return;
         }
         if (destinationPath is null) return;
+        if (sourceFilePath is not null && string.Equals(
+                Path.GetFullPath(destinationPath), Path.GetFullPath(sourceFilePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await ShowMessageAsync("Save deconvolved capture", "The output file cannot be the same as the source VBI capture.");
+            return;
+        }
 
         try
         {

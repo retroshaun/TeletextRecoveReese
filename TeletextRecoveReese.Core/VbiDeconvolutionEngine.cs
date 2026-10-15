@@ -166,10 +166,15 @@ public static class VbiDeconvolutionEngine
             return lines;
         }
 
-        Task<PreparedLine?[]> PrepareBatchAsync(IReadOnlyList<CapturedLine> lines) => Task.Run(() =>
+        Task<PreparedLine?[]> PrepareBatchAsync(IReadOnlyList<CapturedLine> lines) => Task.Run(async () =>
         {
             var prepared = new PreparedLine?[lines.Count];
-            if (deconvolutionControl?.Enabled == false)
+            // A file pause must retain every line, whereas a live device must
+            // continue draining incoming frames while decoding is disabled.
+            if (!liveInput)
+                while (deconvolutionControl?.Enabled == false)
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+            else if (deconvolutionControl?.Enabled == false)
                 return prepared;
             Parallel.For(
                 0,

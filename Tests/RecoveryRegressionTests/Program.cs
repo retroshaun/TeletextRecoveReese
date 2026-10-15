@@ -238,6 +238,7 @@ if (args.Length > 0)
 
 CharacterSetRegressions.Run();
 await CaptureDetectionRegressions.RunAsync();
+await FileVbiCaptureRegressions.RunAsync();
 
 var cancelled = new CancellationToken(true);
 try
