@@ -735,7 +735,7 @@ public class TeletextGridControl : Control
     public override void Render(DrawingContext context)
     {
         var gridBounds = new Rect(0, 0, Columns * CellWidth, Rows * CellHeight);
-        context.FillRectangle(Brushes.Black, gridBounds);
+        FillTeletextBlock(context, Brushes.Black, gridBounds);
         TeletextPage? renderedPage = _screenshotPageOverride ?? Page;
 
         if (renderedPage is null)
@@ -769,7 +769,7 @@ public class TeletextGridControl : Control
                     var upperCell = renderedPage.Grid[x, y - 1];
                     if (upperCell.Background != TeletextColor.Black)
                     {
-                        context.FillRectangle(
+                        FillTeletextBlock(context,
                             ColorBrush(upperCell.Background),
                             new Rect(origin, new Size(CellWidth, CellHeight)));
                     }
@@ -780,7 +780,7 @@ public class TeletextGridControl : Control
 
                 if (cell.Background != TeletextColor.Black)
                 {
-                    context.FillRectangle(
+                    FillTeletextBlock(context,
                         ColorBrush(cell.Background),
                         new Rect(origin, new Size(CellWidth, CellHeight)));
                 }
@@ -819,7 +819,7 @@ public class TeletextGridControl : Control
                         using (context.PushTransform(Matrix.CreateScale(1.0, scaleY)))
                         {
                             var backgroundOrigin = new Point(origin.X, origin.Y / scaleY);
-                            context.FillRectangle(
+                            FillTeletextBlock(context,
                                 ColorBrush(cell.Background),
                                 new Rect(backgroundOrigin, new Size(CellWidth, CellHeight)));
                         }
@@ -1542,8 +1542,17 @@ public class TeletextGridControl : Control
                 halfW - gap * 2,
                 thirdH - gap * 2);
 
-            context.FillRectangle(brush, rect);
+            FillTeletextBlock(context, brush, rect);
         }
+    }
+
+    private static void FillTeletextBlock(DrawingContext context, IBrush brush, Rect bounds)
+    {
+        // Adjacent opaque blocks must share a hard pixel boundary. Antialiased
+        // edges blend separately with the backing colour at fractional UI/DPI
+        // scales, leaving visible seams. Scope this to fills so text stays smooth.
+        using (context.PushRenderOptions(new RenderOptions { EdgeMode = EdgeMode.Aliased }))
+            context.FillRectangle(brush, bounds);
     }
 
     protected override Size MeasureOverride(Size availableSize) =>
