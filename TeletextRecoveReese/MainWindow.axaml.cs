@@ -632,6 +632,7 @@ public partial class MainWindow : Window
     private NativeMenuItem? _nativePreviousPageMenuItem;
     private NativeMenuItem? _nativeNextPageMenuItem;
     private NativeMenuItem? _nativeSelectBroadcastSampleRangeMenuItem;
+    private NativeMenuItem? _nativeBroadcastServiceDataMenuItem;
     private NativeMenuItem? _nativeOpenLiveVbiCaptureMenuItem;
     private NativeMenuItem? _nativeSaveCapturedStreamMenuItem;
     private NativeMenuItem? _nativeSaveMenuItem;
@@ -4306,6 +4307,9 @@ public partial class MainWindow : Window
             .OfType<NativeMenuItem>()
             .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Page", StringComparison.Ordinal))?
             .Menu;
+        _nativeBroadcastServiceDataMenuItem = pageMenu?.Items
+            .OfType<NativeMenuItem>()
+            .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Broadcast service data…", StringComparison.Ordinal));
         _nativePreviousPageMenuItem = pageMenu?.Items
             .OfType<NativeMenuItem>()
             .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Previous page", StringComparison.Ordinal));
@@ -6023,6 +6027,9 @@ public partial class MainWindow : Window
             UpdateClockBank();
             long fpsBaselineFrames = 0;
             long fpsBaselineTimestamp = Stopwatch.GetTimestamp();
+            var captureServicePanel = new BroadcastServiceDataPanel();
+            captureServicePanel.Reset(live: true);
+            long servicePacketNumber = 0;
             var stopButton = new Button
             {
                 Content = fileMode ? "Abort" : "Stop capture",
@@ -6098,6 +6105,7 @@ public partial class MainWindow : Window
                                             },
                                         },
                                     },
+                                    captureServicePanel,
                                 },
                             },
                         },
@@ -6784,6 +6792,7 @@ public partial class MainWindow : Window
                 true,
                 packets =>
                 {
+                    captureServicePanel.FeedBatch(packets, ref servicePacketNumber);
                     foreach (byte[] packet in packets)
                     {
                         if (BroadcastServiceData.TryDecodeFormat1Date(packet, out DateOnly date))
@@ -7734,6 +7743,9 @@ public partial class MainWindow : Window
             Content = "Show deconvolved page",
             IsChecked = showLivePreview,
         };
+        var fileServicePanel = new BroadcastServiceDataPanel();
+        fileServicePanel.Reset(live: true);
+        long servicePacketNumber = 0;
         var progressBar = new ProgressBar { Width = 480, Minimum = 0, Maximum = 100 };
         var abortButton = new Button { Content = "Abort", Width = 90 };
         Grid.SetColumn(abortButton, 1);
@@ -7754,6 +7766,7 @@ public partial class MainWindow : Window
                     progressBar,
                     detailText,
                     timingText,
+                    fileServicePanel,
                     new Grid
                     {
                         ColumnDefinitions = new ColumnDefinitions("*,Auto"),
@@ -7806,8 +7819,10 @@ public partial class MainWindow : Window
             FitWindowToContent();
             liveAssembler = new PageAssembler(_store, decodeEnhancements: false);
         }
-        var packetReporter = new ToggleablePacketProgress(showLivePreview, packets =>
+        var packetReporter = new ToggleablePacketProgress(true, packets =>
         {
+            fileServicePanel.FeedBatch(packets, ref servicePacketNumber);
+            if (showLiveCheckBox.IsChecked != true) return;
             if (liveAssembler is null) InitializeLivePreview();
             TeletextPage? latestPage = null;
             foreach (byte[] packet in packets)
@@ -7830,7 +7845,7 @@ public partial class MainWindow : Window
         showLiveCheckBox.IsCheckedChanged += (_, _) =>
         {
             bool enabled = showLiveCheckBox.IsChecked == true;
-            if (enabled && !packetReporter.Enabled)
+            if (enabled && liveAssembler is null)
             {
                 // Packets are deliberately dropped while preview is disabled. Start
                 // a fresh live assembler so later body rows cannot attach to a page
@@ -7839,7 +7854,11 @@ public partial class MainWindow : Window
                 livePacketIndex = 0;
                 InitializeLivePreview();
             }
-            packetReporter.Enabled = enabled;
+            if (!enabled)
+            {
+                liveAssembler = null;
+                livePacketIndex = 0;
+            }
             _sessionState.ShowLiveDeconvolvedPage = enabled;
             SaveSessionState();
         };
@@ -8170,6 +8189,65 @@ public partial class MainWindow : Window
         await RememberFileAsync(
             file.Path.IsFile ? file.Path.LocalPath : null,
             broadcast: openedAsBroadcast);
+    }
+
+    private async void OnBroadcastServiceDataClicked(object? sender, RoutedEventArgs e) =>
+        await ShowBroadcastServiceDataAsync();
+
+    private async void OnNativeBroadcastServiceDataClicked(object? sender, EventArgs e) =>
+        await ShowBroadcastServiceDataAsync();
+
+    private async Task ShowBroadcastServiceDataAsync()
+    {
+        if (!_broadcastFileOpen) return;
+        // Build the history only when requested. The modal owner cannot change
+        // this capture while the dialog is open; the snapshot stabilizes its list.
+        byte[][] packets = _broadcastPackets.ToArray();
+        using var cancellation = new CancellationTokenSource();
+        var panel = new BroadcastServiceDataPanel { HistoryHeight = 520 };
+        panel.UseDialogLayout();
+        var loading = new TextBlock { Text = "Reading broadcast service packets…", TextWrapping = TextWrapping.Wrap };
+        var close = new Button
+        {
+            Content = "Close", IsCancel = true, IsDefault = true, MinWidth = 90,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var dialog = new Window
+        {
+            Title = "Broadcast service data",
+            Width = 720,
+            Height = 700,
+            CanResize = true,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new Grid
+            {
+                Margin = new Thickness(18),
+                RowDefinitions = new RowDefinitions("*,Auto"),
+                RowSpacing = 12,
+                Children =
+                {
+                    new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                        Content = new StackPanel { Spacing = 10, Children = { loading, panel } },
+                    },
+                    new Border { [Grid.RowProperty] = 1, Child = close },
+                },
+            },
+        };
+        close.Click += (_, _) => dialog.Close();
+        dialog.Closed += (_, _) => cancellation.Cancel();
+        dialog.Opened += async (_, _) =>
+        {
+            try
+            {
+                await panel.LoadAsync(packets, cancellation.Token);
+                loading.IsVisible = false;
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { loading.Text = $"Could not read service data: {ex.Message}"; }
+        };
+        await dialog.ShowDialog(this);
     }
 
     private async Task LoadBroadcastStreamAsync(Stream stream, string? filePath = null)
@@ -10698,6 +10776,9 @@ public partial class MainWindow : Window
 
         SquashJumpToBroadcastButton.IsEnabled = _broadcastFileOpen;
         BroadcastJumpToSquashButton.IsEnabled = _squashFileOpen;
+        BroadcastServiceDataMenuItem.IsEnabled = _broadcastFileOpen;
+        if (_nativeBroadcastServiceDataMenuItem is not null)
+            _nativeBroadcastServiceDataMenuItem.IsEnabled = _broadcastFileOpen;
         bool canSelectBroadcastRange = _broadcastFileOpen && _store.TotalInstanceCount > 0;
         SelectBroadcastSampleRangeMenuItem.IsEnabled = canSelectBroadcastRange;
         if (_nativeSelectBroadcastSampleRangeMenuItem is not null)

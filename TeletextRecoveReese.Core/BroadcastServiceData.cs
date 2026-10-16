@@ -8,20 +8,7 @@ public static class BroadcastServiceData
     public static bool TryDecodeFormat1Date(ReadOnlySpan<byte> packet, out DateOnly date)
     {
         date = default;
-        if (packet.Length != 42) return false;
-
-        var addressLow = Hamming.Decode84(packet[0]);
-        var addressHigh = Hamming.Decode84(packet[1]);
-        var designation = Hamming.Decode84(packet[2]);
-        if (addressLow.UncorrectableError
-            || addressHigh.UncorrectableError
-            || designation.UncorrectableError)
-            return false;
-
-        int address = addressLow.Value | (addressHigh.Value << 4);
-        int magazine = address & 0x07;
-        int row = (address >> 3) & 0x1F;
-        if (magazine != 0 || row != 30 || designation.Value is not (0 or 1))
+        if (!BroadcastServiceDecoder.TryDecodeHeader(packet, out int format) || format != 1)
             return false;
 
         // T42 omits clock run-in and framing bytes, so EN 300 706 bytes 16-18
