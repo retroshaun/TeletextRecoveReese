@@ -21,9 +21,8 @@ public sealed class BroadcastServiceDataPanel : UserControl
     private readonly TextBlock _summary = new() { Text = "Broadcast service data" };
     private readonly TextBlock _notice = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11 };
     private readonly ObservableCollection<string> _rows = new();
-    private readonly ListBox _list = new() { Height = 190 };
+    private readonly ListBox _list = new() { MaxHeight = 520 };
     private readonly Expander _expander;
-    public double HistoryHeight { get => _list.Height; set => _list.Height = value; }
 
     public BroadcastServiceDataPanel()
     {
@@ -108,14 +107,40 @@ public sealed class BroadcastServiceDataPanel : UserControl
         Refresh();
     }
 
-    public void UseDialogLayout()
+    public void UseDialogLayout(Button? closeButton = null)
     {
         if (_dialogLayout) return;
         _dialogLayout = true;
-        var body = (Control)_expander.Content!;
+        var body = (StackPanel)_expander.Content!;
+        Control[] children = body.Children.ToArray();
+        body.Children.Clear();
         _expander.Content = null;
         _expander.Header = null;
-        Content = body;
+        if (closeButton is not null)
+        {
+            Grid.SetColumn(closeButton, 1);
+            closeButton.VerticalAlignment = VerticalAlignment.Bottom;
+            children[2] = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                ColumnSpacing = 8,
+                Children = { children[2], closeButton },
+            };
+        }
+        _list.ClearValue(MaxHeightProperty);
+        HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        VerticalContentAlignment = VerticalAlignment.Stretch;
+        var layout = new Grid
+        {
+            RowDefinitions = new RowDefinitions("*,Auto,Auto"),
+            RowSpacing = 8,
+        };
+        for (int row = 0; row < children.Length; row++)
+        {
+            Grid.SetRow(children[row], row);
+            layout.Children.Add(children[row]);
+        }
+        Content = layout;
         RefreshRows();
     }
 

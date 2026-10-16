@@ -1482,7 +1482,9 @@ public partial class MainWindow : Window
     private async Task ShowCaptureCardPresetsAsync()
     {
         _sessionState.CustomCaptureCardPresets ??= new List<CaptureCardPreset>();
-        var presetList = new ListBox { Width = 270, MinHeight = 330 };
+        var presetList = new ListBox { Width = 270 };
+        ScrollViewer.SetVerticalScrollBarVisibility(
+            presetList, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
         var details = new TextBlock
         {
             Width = 390,
@@ -1511,6 +1513,8 @@ public partial class MainWindow : Window
             List<CaptureCardPreset> presets = GetPresets();
             presetList.ItemsSource = presets;
             presetList.SelectedItem = select ?? presets.FirstOrDefault();
+            if (presetList.SelectedItem is { } selected)
+                presetList.ScrollIntoView(selected);
         }
 
         void ShowDetails(CaptureCardPreset? preset)
@@ -1537,7 +1541,7 @@ public partial class MainWindow : Window
                 $"Signal threshold  {preset.SignalLevelThreshold:0.##}\n" +
                 $"CRI/FC range      {preset.CriFcRangeThreshold:0.##}\n" +
                 $"CRI/FC confidence {preset.CriFcConfidenceThreshold:0.##}\n\n" +
-                (preset.IsBuiltIn ? "Built-in preset" : "User preset — stored in session.json");
+                (preset.IsBuiltIn ? "Built-in preset" : "User preset");
             deleteButton.IsEnabled = !preset.IsBuiltIn;
             cloneEditButton.IsEnabled = true;
             cloneEditButton.Content = preset.IsBuiltIn ? "Clone…" : "Edit…";
@@ -1632,7 +1636,15 @@ public partial class MainWindow : Window
         };
         closeButton.Click += (_, _) => dialog.Close();
 
-        RefreshPresets();
+        // Measure the built-in list with the actual theme and font before adding
+        // custom entries. Keep that viewport height for the rest of this dialog.
+        presetList.ItemsSource = BuiltInCaptureCardPresets;
+        presetList.SelectedItem = BuiltInCaptureCardPresets.FirstOrDefault();
+        dialog.Opened += (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            presetList.Height = Math.Ceiling(presetList.Bounds.Height);
+            RefreshPresets();
+        }, DispatcherPriority.Loaded);
         await dialog.ShowDialog(this);
     }
 
@@ -8235,34 +8247,32 @@ public partial class MainWindow : Window
         // this capture while the dialog is open; the snapshot stabilizes its list.
         byte[][] packets = _broadcastPackets.ToArray();
         using var cancellation = new CancellationTokenSource();
-        var panel = new BroadcastServiceDataPanel { HistoryHeight = 520 };
-        panel.UseDialogLayout();
+        var panel = new BroadcastServiceDataPanel();
         var loading = new TextBlock { Text = "Reading broadcast service packets…", TextWrapping = TextWrapping.Wrap };
         var close = new Button
         {
             Content = "Close", IsCancel = true, IsDefault = true, MinWidth = 90,
             HorizontalAlignment = HorizontalAlignment.Right,
         };
+        panel.UseDialogLayout(close);
         var dialog = new Window
         {
             Title = "Broadcast service data",
             Width = 720,
             Height = 700,
+            MinWidth = 520,
+            MinHeight = 320,
             CanResize = true,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Content = new Grid
             {
                 Margin = new Thickness(18),
-                RowDefinitions = new RowDefinitions("*,Auto"),
+                RowDefinitions = new RowDefinitions("Auto,*"),
                 RowSpacing = 12,
                 Children =
                 {
-                    new ScrollViewer
-                    {
-                        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-                        Content = new StackPanel { Spacing = 10, Children = { loading, panel } },
-                    },
-                    new Border { [Grid.RowProperty] = 1, Child = close },
+                    loading,
+                    new Border { [Grid.RowProperty] = 1, Child = panel },
                 },
             },
         };
