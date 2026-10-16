@@ -13,11 +13,37 @@ public sealed record BroadcastServiceInfo(
     string? InitialPage,
     bool InitialPageDamaged)
 {
+    // Keep spacing attributes independently of the plain text used for copying.
+    // A bad-parity byte is replaced here too, so it cannot change later colours.
+    public string StatusCodes { get; init; } = string.Empty;
+    public bool HasStatusColourCodes => StatusCodes.Any(code => code is <= '\x07'
+        or >= '\x10' and <= '\x17' or '\x1C' or '\x1D');
+
+    public IReadOnlyList<BroadcastStatusCell> GetStatusCells()
+    {
+        var cells = new BroadcastStatusCell[Status.Length];
+        var foreground = TeletextColor.White;
+        var background = TeletextColor.Black;
+        for (int index = 0; index < cells.Length; index++)
+        {
+            char code = index < StatusCodes.Length ? StatusCodes[index] : Status[index];
+            if (code == '\x1C') background = TeletextColor.Black;
+            else if (code == '\x1D') background = foreground;
+            cells[index] = new BroadcastStatusCell(Status[index], foreground, background);
+            // Foreground colours are set-after; background changes are set-at.
+            if (code <= '\x07') foreground = (TeletextColor)code;
+            else if (code is >= '\x10' and <= '\x17') foreground = (TeletextColor)(code - 0x10);
+        }
+        return cells;
+    }
+
     public DateTime? UtcDateTime => Date is { } date && UtcTime is { } time
         ? DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Utc) : null;
     public DateTime? LocalDateTime => UtcDateTime is { } utc && LocalOffset is { } offset
         ? utc + offset : null;
 }
+
+public readonly record struct BroadcastStatusCell(char Character, TeletextColor Foreground, TeletextColor Background);
 
 public static class BroadcastServiceDecoder
 {
@@ -29,11 +55,13 @@ public static class BroadcastServiceDecoder
         if (!TryDecodeHeader(packet, out int format)) return false;
         int errors = 0;
         Span<char> text = stackalloc char[20];
+        Span<char> codes = stackalloc char[20];
         for (int index = 0; index < text.Length; index++)
         {
             byte value = packet[22 + index];
             bool valid = BitOperations.PopCount((uint)value) % 2 == 1;
             if (!valid) errors++;
+            codes[index] = valid ? (char)(value & 127) : '\uFFFD';
             text[index] = valid ? CharacterSets.Decode((byte)(value & 127)) : '\uFFFD';
         }
         Span<int> initial = stackalloc int[6];
@@ -71,7 +99,10 @@ public static class BroadcastServiceDecoder
             // NI is sent most significant bit first, unlike the surrounding data.
             network = (ushort)((ReverseBits(packet[9]) << 8) | ReverseBits(packet[10]));
         }
-        info = new BroadcastServiceInfo(format, new string(text), errors, date, time, offset, network, page, damaged);
+        info = new BroadcastServiceInfo(format, new string(text), errors, date, time, offset, network, page, damaged)
+        {
+            StatusCodes = new string(codes),
+        };
         return true;
     }
 

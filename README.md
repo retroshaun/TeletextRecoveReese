@@ -66,7 +66,8 @@ The editor uses one or two synchronized panes:
 - Show control-code bytes and hexadecimal values directly in the grid.
 - Show raw bytes across the complete current selection.
 - Toggle X/26 diacritic markers only when they are needed.
-- Inspect packet 8/30 status messages, transmitted UTC/local date and time,
+- Inspect packet 8/30 status messages with transmitted text/background colours,
+  UTC/local date and time,
   network ID and initial-page links via **Page → Broadcast service data…** when
   a full broadcast is open. The modal dialog builds its history only when opened.
 - Browse every received service packet in stream order, copy a selected record,

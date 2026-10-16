@@ -20,7 +20,7 @@ public sealed class BroadcastServiceDataPanel : UserControl
     private bool _dialogLayout;
     private readonly TextBlock _summary = new() { Text = "Broadcast service data" };
     private readonly TextBlock _notice = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11 };
-    private readonly ObservableCollection<string> _rows = new();
+    private readonly ObservableCollection<BroadcastServicePacket> _rows = new();
     private readonly ListBox _list = new() { MaxHeight = 520 };
     private readonly Expander _expander;
 
@@ -29,11 +29,10 @@ public sealed class BroadcastServiceDataPanel : UserControl
         var copy = new Button { Content = "Copy selected" };
         var export = new Button { Content = "Export packets CSV…" };
         _list.ItemsSource = _rows;
-        _list.ItemTemplate = new FuncDataTemplate<string>((text, _) => new TextBlock
-        {
-            Text = text,
-            TextWrapping = TextWrapping.Wrap,
-        });
+        // Recycling clears the old container's content before assigning its next
+        // packet, so the template also gets called with a null item while scrolling.
+        _list.ItemTemplate = new FuncDataTemplate<BroadcastServicePacket>((packet, _) =>
+            packet is null ? null : CreatePacketRow(packet));
         ScrollViewer.SetHorizontalScrollBarVisibility(_list, Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
         _expander = new Expander
         {
@@ -63,9 +62,9 @@ public sealed class BroadcastServiceDataPanel : UserControl
         };
         copy.Click += async (_, _) =>
         {
-            if (_list.SelectedItem is string selected && TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard)
+            if (_list.SelectedItem is BroadcastServicePacket selected && TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard)
             {
-                try { await clipboard.SetTextAsync(selected); }
+                try { await clipboard.SetTextAsync(FormatPacketText(selected)); }
                 catch (Exception ex) { _notice.Text = $"Could not copy: {ex.Message}"; }
             }
         };
@@ -186,19 +185,49 @@ public sealed class BroadcastServiceDataPanel : UserControl
         for (int index = 0; index < count; index++)
         {
             var item = _history.Packets[index];
-            var data = item.Data;
-            string row = $"#{item.PacketNumber:N0} · Packet 8/30 Format {data.Format} · {Timestamp(data)}\n"
-                + $"Status: {Status(data)}\n"
-                + $"Initial page: {data.InitialPage ?? (data.InitialPageDamaged ? "damaged" : "not specified")}"
-                + (data.Format == 1
-                    ? $" · Network ID: 0x{data.NetworkId:X4} · UTC offset: {OffsetText(data.LocalOffset)}\nLocal: {LocalText(data)}"
-                    : string.Empty)
-                + (data.StatusParityErrors > 0 ? $"\nStatus parity errors: {data.StatusParityErrors} (�)." : string.Empty);
-            if (index >= _rows.Count) _rows.Add(row);
-            else if (_rows[index] != row) _rows[index] = row;
+            if (index >= _rows.Count) _rows.Add(item);
+            else if (_rows[index] != item) _rows[index] = item;
         }
         if (selected >= 0 && selected < _rows.Count) _list.SelectedIndex = selected;
     }
+
+    private static Control CreatePacketRow(BroadcastServicePacket packet)
+    {
+        var data = packet.Data;
+        Control message = data.HasStatusColourCodes
+            ? new BroadcastStatusMessageControl(data)
+            : new TextBlock { Text = Status(data), VerticalAlignment = VerticalAlignment.Center };
+        return new StackPanel
+        {
+            Children =
+            {
+                new TextBlock { Text = PacketHeading(packet), TextWrapping = TextWrapping.Wrap },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children =
+                    {
+                        new TextBlock { Text = "Status: ", VerticalAlignment = VerticalAlignment.Center },
+                        message,
+                    },
+                },
+                new TextBlock { Text = PacketDetails(data), TextWrapping = TextWrapping.Wrap },
+            },
+        };
+    }
+
+    private static string PacketHeading(BroadcastServicePacket packet) =>
+        $"#{packet.PacketNumber:N0} · Packet 8/30 Format {packet.Data.Format} · {Timestamp(packet.Data)}";
+
+    private static string PacketDetails(BroadcastServiceInfo data) =>
+        $"Initial page: {data.InitialPage ?? (data.InitialPageDamaged ? "damaged" : "not specified")}"
+        + (data.Format == 1
+            ? $" · Network ID: 0x{data.NetworkId:X4} · UTC offset: {OffsetText(data.LocalOffset)}\nLocal: {LocalText(data)}"
+            : string.Empty)
+        + (data.StatusParityErrors > 0 ? $"\nStatus parity errors: {data.StatusParityErrors} (�)." : string.Empty);
+
+    private static string FormatPacketText(BroadcastServicePacket packet) =>
+        $"{PacketHeading(packet)}\nStatus: {Status(packet.Data)}\n{PacketDetails(packet.Data)}";
 
     private static string Status(BroadcastServiceInfo data) => string.IsNullOrWhiteSpace(data.Status)
         ? "(empty status message)" : data.Status.TrimEnd();

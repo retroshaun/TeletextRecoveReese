@@ -67,6 +67,45 @@ internal static class BroadcastServiceRegressions
                 && data.UtcTime is null && data.LocalOffset is null && data.NetworkId is null
                 && data.Status.StartsWith("WELCOME"), "Format 2 status is independent of PDC payload");
         }
+        for (int colour = 0; colour < 8; colour++)
+        {
+            valid = Packet();
+            valid[22] = Parity((char)colour);
+            valid[23] = Parity('A');
+            BroadcastServiceDecoder.TryDecode(valid, out data);
+            var cells = data.GetStatusCells();
+            Check(data.HasStatusColourCodes && cells.Count == 20
+                && cells[0].Character == ' ' && cells[0].Foreground == TeletextColor.White
+                && cells[1].Foreground == (TeletextColor)colour && cells[1].Background == TeletextColor.Black,
+                $"status colour {colour} applies after its original spacing position");
+        }
+        valid = Packet();
+        char[] coloured = ['\x04', '\x1D', '\x07', 'T', 'V', '\x1C', 'X'];
+        for (int index = 0; index < coloured.Length; index++) valid[22 + index] = Parity(coloured[index]);
+        BroadcastServiceDecoder.TryDecode(valid, out data);
+        var colouredCells = data.GetStatusCells();
+        Check(colouredCells[0].Background == TeletextColor.Black
+            && colouredCells[1].Background == TeletextColor.Blue
+            && colouredCells[2].Background == TeletextColor.Blue
+            && colouredCells[3].Foreground == TeletextColor.White
+            && colouredCells[3].Background == TeletextColor.Blue
+            && colouredCells[5].Background == TeletextColor.Black
+            && colouredCells[6].Background == TeletextColor.Black,
+            "status background changes include their own position and black background resets correctly");
+        Check(data.StatusCodes[..coloured.Length] == new string(coloured)
+            && data.Status[..coloured.Length] == "   TV X", "retain raw status attributes and plain-text spacing independently");
+        valid[22] ^= 128;
+        BroadcastServiceDecoder.TryDecode(valid, out data);
+        Check(data.GetStatusCells()[3].Background == TeletextColor.White && data.Status[0] == '�',
+            "bad-parity colour code cannot change later foreground or background");
+        BroadcastServiceDecoder.TryDecode(Packet(), out data);
+        Check(!data.HasStatusColourCodes && data.GetStatusCells().All(cell =>
+            cell.Foreground == TeletextColor.White && cell.Background == TeletextColor.Black),
+            "status attributes reset for each packet and ordinary messages keep the plain display");
+        valid = Packet(2); valid[22] = Parity('\x02');
+        BroadcastServiceDecoder.TryDecode(valid, out data);
+        Check(data.HasStatusColourCodes && data.GetStatusCells()[1].Foreground == TeletextColor.Green,
+            "Format 2 status messages use the same colour controls");
         var history = new BroadcastServiceHistory();
         valid = Packet(); history.Feed(valid, 10);
         valid[17] = 0x68; history.Feed(valid, 20);
