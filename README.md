@@ -118,6 +118,8 @@ The editor uses one or two synchronized panes:
 
 - Create a squashed stream directly from an open full broadcast using filters.
 - Build consensus rows from repeated receptions and parity quality.
+- During squashing, consecutive header-only announcements for the same page and
+  subpage count as one reception, so repeated headers do not vote away its body.
 - By default, keep text rows only when present in more than half of the page
   receptions, matching `vhs-teletext` row-presence voting. Enable **Keep
   infrequently received rows** in the squash dialog to retain rare rows too.

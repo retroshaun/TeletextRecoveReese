@@ -13,6 +13,7 @@ public class PageAssembler
 {
     private readonly PageStore _store;
     private readonly bool _decodeEnhancements;
+    private readonly bool _combineRepeatedHeaderPreambles;
 
     // magazine -> the instance currently being built (rows are still arriving for it)
     private readonly Dictionary<int, PageInstance> _inProgress = new();
@@ -26,10 +27,12 @@ public class PageAssembler
     public long OrphanedBodyRows { get; private set; }
     public long RepeatedBodyRows { get; private set; }
 
-    public PageAssembler(PageStore store, bool decodeEnhancements = true)
+    public PageAssembler(PageStore store, bool decodeEnhancements = true,
+        bool combineRepeatedHeaderPreambles = false)
     {
         _store = store;
         _decodeEnhancements = decodeEnhancements;
+        _combineRepeatedHeaderPreambles = combineRepeatedHeaderPreambles;
     }
 
     private static (int value, bool uncorrectable) DecodeNibblePair(byte lo, byte hi)
@@ -112,6 +115,23 @@ public class PageAssembler
         int subpage = 0;
         if (!sub1Bad && !sub2Bad)
             subpage = (subWord1 | (subWord2 << 8)) & 0x3F7F;
+
+        // Some services repeat a page's header before transmitting its body.
+        // Recovery must count that preamble as one reception, not several votes
+        // for an empty page. Ordinary browsing keeps every original occurrence.
+        if (_combineRepeatedHeaderPreambles && !sub1Bad && !sub2Bad
+            && _inProgress.TryGetValue(magazine, out var previous)
+            && previous.PageNumber == pageNumber && previous.Subpage == subpage
+            && previous.RowsReceived.Count == 0 && previous.Page.RawRows[25] is null
+            && previous.Page.EnhancementPackets.Count == 0 && previous.Page.FastextPacket is null
+            && !previous.Page.CharacterSetPackets.Any(packet => !packet.IsMagazineDefault)
+            && previous.Page.RawRows[0] is { Length: 42 } previousHeader
+            && !DecodeNibblePair(previousHeader[4], previousHeader[5]).uncorrectable
+            && !DecodeNibblePair(previousHeader[6], previousHeader[7]).uncorrectable)
+        {
+            ApplyRow(previous.Page, 0, raw42, packetIndex);
+            return;
+        }
 
         // Whatever was being built for this magazine is now complete - a new header
         // means a new transmission cycle started, regardless of whether the page/

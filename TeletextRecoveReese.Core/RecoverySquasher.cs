@@ -32,7 +32,8 @@ public static class RecoverySquasher
     {
         options ??= new RecoverySquashOptions();
         var store = new PageStore();
-        var assembler = new PageAssembler(store, decodeEnhancements: true);
+        var assembler = new PageAssembler(store, decodeEnhancements: true,
+            combineRepeatedHeaderPreambles: true);
         for (int index = 0; index < broadcastPackets.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();

@@ -52,6 +52,24 @@ Check("missing row wins a tie", Capture(2, 1), false);
 Check("majority row survives", Capture(3, 2), true);
 Check("singleton page survives", Capture(1, 1), true);
 
+List<byte[]> RepeatHeaders(List<byte[]> capture, int repetitions)
+{
+    var repeated = new List<byte[]>();
+    foreach (var packet in capture)
+    {
+        int row = (Hamming.Decode84(packet[0]).Value | Hamming.Decode84(packet[1]).Value << 4) >> 3;
+        if (row == 0)
+            for (int repeat = 1; repeat < repetitions; repeat++) repeated.Add((byte[])packet.Clone());
+        repeated.Add(packet);
+    }
+    return repeated;
+}
+
+Check("repeated header preambles do not erase regularly transmitted body rows", RepeatHeaders(Capture(5, 5), 8), true);
+Check("repeated header preambles still reject an infrequent stray row", RepeatHeaders(Capture(5, 1), 8), false);
+Check("keep infrequent rows still works with repeated header preambles", RepeatHeaders(Capture(5, 1), 8), true, keep: true);
+Check("repeated headers do not remove explicit blank row votes", RepeatHeaders(Capture(5, 1, blanks: true), 8), true, expectedBlank: true);
+
 byte[] Header(int subpage, int controls = 0)
 {
     var header = Packet(0);
@@ -106,6 +124,52 @@ void Verify(string name, bool condition)
     if (!condition) throw new Exception($"FAILED: {name}");
     Console.WriteLine($"PASS: {name}");
 }
+
+List<PageInstance> AssemblePreambles(List<byte[]> packets, bool combine)
+{
+    var store = new PageStore();
+    var assembler = new PageAssembler(store, combineRepeatedHeaderPreambles: combine);
+    for (int index = 0; index < packets.Count; index++) assembler.Feed(packets[index], index);
+    assembler.FinalizeAll();
+    return store.AllInstances.ToList();
+}
+
+var preambles = RepeatHeaders(Capture(2, 2), 8);
+Verify("broadcast browsing retains all original repeated headers", AssemblePreambles(preambles, false).Count == 16);
+Verify("squashing counts one reception per repeated-header preamble", AssemblePreambles(preambles, true).Count == 2);
+var originalSquash = RecoverySquasher.Build(Capture(5, 5));
+var preambleSquash = RecoverySquasher.Build(RepeatHeaders(Capture(5, 5), 8));
+Verify("header repetition leaves every recovered row byte-for-byte identical", originalSquash.Count == preambleSquash.Count
+    && originalSquash.Zip(preambleSquash).All(pair => pair.First.SequenceEqual(pair.Second)));
+Verify("repeated announcements cannot satisfy minimum reception count", RecoverySquasher.Build(
+    RepeatHeaders(Capture(1, 1), 8), new RecoverySquashOptions { MinimumReceptions = 2 }).Count == 0);
+var parallelPreambles = new List<byte[]>();
+foreach (var packet in RepeatHeaders(Capture(2, 2), 4))
+{
+    parallelPreambles.Add(packet);
+    var otherMagazine = Packet(0);
+    otherMagazine[0] = Hamming.Encode84(2);
+    parallelPreambles.Add(otherMagazine);
+}
+Verify("other magazines do not break repeated-header preambles", AssemblePreambles(parallelPreambles, true)
+    .Count(instance => instance.Magazine == 1) == 2);
+var otherPage = Packet(0); otherPage[2] = Hamming.Encode84(1);
+Verify("another page separates genuine header-only cycles", AssemblePreambles(
+    new List<byte[]> { Header(0), otherPage, Header(0), Packet(1) }, true).Count == 3);
+Verify("another subpage separates genuine header-only cycles", AssemblePreambles(
+    new List<byte[]> { Header(0), Header(1), Header(0), Packet(1) }, true).Count == 3);
+Verify("an explicitly transmitted blank row ends the preamble", AssemblePreambles(
+    new List<byte[]> { Header(0), Packet(1), Header(0), Packet(1, (byte)'A') }, true).Count == 2);
+Verify("CRC row 25 ends the preamble", AssemblePreambles(
+    new List<byte[]> { Header(0), Packet(25), Header(0) }, true).Count == 2);
+var fastext = Enumerable.Repeat(Hamming.Encode84(0), 42).ToArray();
+fastext[0] = Hamming.Encode84(9); fastext[1] = Hamming.Encode84(13); // Magazine 1, packet 27.
+Verify("page-specific Fastext data ends the preamble", AssemblePreambles(
+    new List<byte[]> { Header(0), fastext, Header(0) }, true).Count == 2);
+var changedHeader = RepeatHeaders(Capture(1, 1), 4);
+changedHeader[0] = Header(0, controls: 0x80);
+Verify("changing header flags before any body do not create empty votes", AssemblePreambles(changedHeader, true).Count == 1);
+Verify("rotating contents still separate with repeated header announcements", Recover(RepeatHeaders(Rotating(), 8)).Count == 2);
 
 var variants = Recover(Rotating());
 Verify("rotating contents recover separately in first-seen order", variants.Count == 2
