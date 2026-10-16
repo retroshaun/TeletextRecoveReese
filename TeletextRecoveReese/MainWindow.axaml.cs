@@ -1491,6 +1491,7 @@ public partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
         };
         var newButton = new Button { Content = "New…", Width = 90 };
+        var cloneEditButton = new Button { Content = "Clone…", Width = 90, IsEnabled = false };
         var deleteButton = new Button
         {
             Content = "Delete",
@@ -1518,6 +1519,7 @@ public partial class MainWindow : Window
             {
                 details.Text = "Select a preset to see its capture parameters.";
                 deleteButton.IsEnabled = false;
+                cloneEditButton.IsEnabled = false;
                 return;
             }
 
@@ -1537,6 +1539,8 @@ public partial class MainWindow : Window
                 $"CRI/FC confidence {preset.CriFcConfidenceThreshold:0.##}\n\n" +
                 (preset.IsBuiltIn ? "Built-in preset" : "User preset — stored in session.json");
             deleteButton.IsEnabled = !preset.IsBuiltIn;
+            cloneEditButton.IsEnabled = true;
+            cloneEditButton.Content = preset.IsBuiltIn ? "Clone…" : "Edit…";
         }
 
         var dialog = new Window
@@ -1558,7 +1562,7 @@ public partial class MainWindow : Window
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
-            Children = { newButton, deleteButton },
+            Children = { newButton, cloneEditButton, deleteButton },
         };
         buttons.Children.Add(editButtons);
         Grid.SetColumn(closeButton, 2);
@@ -1590,6 +1594,35 @@ public partial class MainWindow : Window
             SaveSessionState();
             RefreshPresets(preset);
         };
+        cloneEditButton.Click += async (_, _) =>
+        {
+            if (presetList.SelectedItem is not CaptureCardPreset selected) return;
+            bool editing = !selected.IsBuiltIn;
+            List<CaptureCardPreset> presets = GetPresets();
+            string suggestedName = selected.Name;
+            if (!editing)
+            {
+                suggestedName = $"{selected.Name} (copy)";
+                int copyNumber = 2;
+                while (presets.Any(p => string.Equals(p.Name, suggestedName, StringComparison.OrdinalIgnoreCase)))
+                    suggestedName = $"{selected.Name} (copy {copyNumber++})";
+            }
+            CaptureCardPreset? saved = await ShowNewCaptureCardPresetAsync(
+                dialog, presets, selected, editing, suggestedName);
+            if (saved is null) return;
+            if (editing)
+            {
+                int index = _sessionState.CustomCaptureCardPresets.IndexOf(selected);
+                if (index < 0) return;
+                _sessionState.CustomCaptureCardPresets[index] = saved;
+                if (string.Equals(_sessionState.LastCaptureCardPresetName, selected.Name, StringComparison.OrdinalIgnoreCase))
+                    _sessionState.LastCaptureCardPresetName = saved.Name;
+            }
+            else
+                _sessionState.CustomCaptureCardPresets.Add(saved);
+            SaveSessionState();
+            RefreshPresets(saved);
+        };
         deleteButton.Click += (_, _) =>
         {
             if (presetList.SelectedItem is not CaptureCardPreset { IsBuiltIn: false } preset) return;
@@ -1606,13 +1639,15 @@ public partial class MainWindow : Window
     private static async Task<CaptureCardPreset?> ShowNewCaptureCardPresetAsync(
         Window owner,
         IReadOnlyCollection<CaptureCardPreset> existingPresets,
-        CaptureCardPreset? initial = null)
+        CaptureCardPreset? initial = null,
+        bool editing = false,
+        string? suggestedName = null)
     {
         var name = new TextBox
         {
             Width = 250,
             PlaceholderText = "Card manufacturer and model",
-            Text = initial?.Name ?? string.Empty,
+            Text = suggestedName ?? initial?.Name ?? string.Empty,
         };
         var chipset = new TextBox
         {
@@ -1621,6 +1656,9 @@ public partial class MainWindow : Window
             Text = initial?.Chipset ?? string.Empty,
         };
         string[] interfaceChoices = ["PCI", "PCIe", "USB", "DirectShow", "V4L2", "TBC file", "Other"];
+        if (initial is not null && !string.IsNullOrWhiteSpace(initial.Interface)
+            && !interfaceChoices.Contains(initial.Interface))
+            interfaceChoices = [.. interfaceChoices, initial.Interface];
         var cardInterface = new ComboBox
         {
             Width = 250,
@@ -1702,7 +1740,8 @@ public partial class MainWindow : Window
 
         var dialog = new Window
         {
-            Title = "New capture card preset",
+            Title = editing ? "Edit capture card preset"
+                : initial?.IsBuiltIn == true ? "Clone capture card preset" : "New capture card preset",
             SizeToContent = SizeToContent.WidthAndHeight,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -1737,7 +1776,8 @@ public partial class MainWindow : Window
             int lines = (int)(fieldLines.Value ?? 0);
             if (string.IsNullOrWhiteSpace(presetName))
                 error.Text = "Enter a card preset name.";
-            else if (existingPresets.Any(p => string.Equals(p.Name, presetName, StringComparison.OrdinalIgnoreCase)))
+            else if (existingPresets.Any(p => (!editing || !ReferenceEquals(p, initial))
+                         && string.Equals(p.Name, presetName, StringComparison.OrdinalIgnoreCase)))
                 error.Text = "A preset with this name already exists.";
             else if (startEnd <= start)
                 error.Text = "Line start range end must be greater than its start.";
