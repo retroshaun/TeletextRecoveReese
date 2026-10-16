@@ -70,9 +70,7 @@ The editor uses one or two synchronized panes:
   network ID and initial-page links via **Page → Broadcast service data…** when
   a full broadcast is open. The modal dialog builds its history only when opened.
 - Browse every received service packet in stream order, copy a selected record,
-  and export all retained packets as CSV. A compact section is also embedded in
-  live capture and file deconvolution; live previews retain the latest 5,000 service
-  packets, while a loaded T42 capture exposes every recovered copy.
+  and export all recovered service packets as CSV from the modal inspection dialog.
 - Keep the broadcast pane read-only to protect the source capture.
 
 ## Restoration workflow

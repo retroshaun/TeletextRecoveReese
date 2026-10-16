@@ -6027,9 +6027,6 @@ public partial class MainWindow : Window
             UpdateClockBank();
             long fpsBaselineFrames = 0;
             long fpsBaselineTimestamp = Stopwatch.GetTimestamp();
-            var captureServicePanel = new BroadcastServiceDataPanel();
-            captureServicePanel.Reset(live: true);
-            long servicePacketNumber = 0;
             var stopButton = new Button
             {
                 Content = fileMode ? "Abort" : "Stop capture",
@@ -6105,7 +6102,6 @@ public partial class MainWindow : Window
                                             },
                                         },
                                     },
-                                    captureServicePanel,
                                 },
                             },
                         },
@@ -6792,7 +6788,6 @@ public partial class MainWindow : Window
                 true,
                 packets =>
                 {
-                    captureServicePanel.FeedBatch(packets, ref servicePacketNumber);
                     foreach (byte[] packet in packets)
                     {
                         if (BroadcastServiceData.TryDecodeFormat1Date(packet, out DateOnly date))
@@ -7743,9 +7738,6 @@ public partial class MainWindow : Window
             Content = "Show deconvolved page",
             IsChecked = showLivePreview,
         };
-        var fileServicePanel = new BroadcastServiceDataPanel();
-        fileServicePanel.Reset(live: true);
-        long servicePacketNumber = 0;
         var progressBar = new ProgressBar { Width = 480, Minimum = 0, Maximum = 100 };
         var abortButton = new Button { Content = "Abort", Width = 90 };
         Grid.SetColumn(abortButton, 1);
@@ -7766,7 +7758,6 @@ public partial class MainWindow : Window
                     progressBar,
                     detailText,
                     timingText,
-                    fileServicePanel,
                     new Grid
                     {
                         ColumnDefinitions = new ColumnDefinitions("*,Auto"),
@@ -7819,9 +7810,8 @@ public partial class MainWindow : Window
             FitWindowToContent();
             liveAssembler = new PageAssembler(_store, decodeEnhancements: false);
         }
-        var packetReporter = new ToggleablePacketProgress(true, packets =>
+        var packetReporter = new ToggleablePacketProgress(showLivePreview, packets =>
         {
-            fileServicePanel.FeedBatch(packets, ref servicePacketNumber);
             if (showLiveCheckBox.IsChecked != true) return;
             if (liveAssembler is null) InitializeLivePreview();
             TeletextPage? latestPage = null;
@@ -7854,6 +7844,7 @@ public partial class MainWindow : Window
                 livePacketIndex = 0;
                 InitializeLivePreview();
             }
+            packetReporter.Enabled = enabled;
             if (!enabled)
             {
                 liveAssembler = null;
