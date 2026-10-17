@@ -930,9 +930,9 @@ public class TeletextGridControl : Control
     {
         var bottomHalfRows = new bool[Rows];
 
-        // QTeletextMaker considers display rows 1-23. A top half may start only
-        // through row 22, leaving row 23 for its bottom half; row 24 is unaffected.
-        for (int row = 1; row < 24; row++)
+        // Include the final display row as a bottom half when the penultimate
+        // row contains a height attribute, so both halves render together.
+        for (int row = 1; row < Rows - 1; row++)
         {
             bool hasDoubleHeightAttribute = false;
             if (page.RawRows[row] is { Length: 42 } raw)
@@ -948,7 +948,7 @@ public class TeletextGridControl : Control
                 }
             }
 
-            if (hasDoubleHeightAttribute && row < 23)
+            if (hasDoubleHeightAttribute)
             {
                 bottomHalfRows[row + 1] = true;
                 row++; // a bottom-half row cannot itself begin another pair

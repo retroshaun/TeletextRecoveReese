@@ -9,7 +9,7 @@ public class PageInstance
 {
     public int Magazine { get; init; }
     public int PageNumber { get; init; } // hex page number, e.g. 0x00-0xFF
-    public int Subpage { get; init; }
+    public int Subpage { get; set; }
 
     /// <summary>0-based order in which this instance was captured, among all
     /// instances of this exact (magazine, page, subpage). Not a global packet index.</summary>

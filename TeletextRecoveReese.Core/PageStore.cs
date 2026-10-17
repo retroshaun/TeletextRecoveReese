@@ -103,6 +103,47 @@ public class PageStore
         return removed;
     }
 
+    /// <summary>Exchange two subpage addresses, keeping each instance's content and source data together.</summary>
+    public bool SwapSubpages(int magazine, int page, int first, int second)
+    {
+        var firstKey = (magazine, page, first);
+        var secondKey = (magazine, page, second);
+        if (first == second || !_instances.TryGetValue(firstKey, out var left)
+            || !_instances.TryGetValue(secondKey, out var right))
+            return false;
+
+        foreach (var instance in left) SetSubpage(instance, second);
+        foreach (var instance in right) SetSubpage(instance, first);
+        _instances[firstKey] = right;
+        _instances[secondKey] = left;
+        return true;
+    }
+
+    private static void SetSubpage(PageInstance instance, int subpage)
+    {
+        instance.Subpage = subpage;
+        instance.Page.SubPage = subpage;
+        if (instance.Page.RawRows[0] is { Length: 42 } header)
+        {
+            header = (byte[])header.Clone();
+            RewriteSubpageHeader(header, subpage);
+            instance.Page.RawRows[0] = header;
+        }
+    }
+
+    /// <summary>Rewrite S1–S4 while preserving the shared C4–C6 control bits.</summary>
+    public static void RewriteSubpageHeader(byte[] header, int subpage)
+    {
+        int low = Hamming.Decode84(header[4]).Value | (Hamming.Decode84(header[5]).Value << 4);
+        int high = Hamming.Decode84(header[6]).Value | (Hamming.Decode84(header[7]).Value << 4);
+        low = (low & 0x80) | (subpage & 0x7F);
+        high = (high & 0xC0) | ((subpage >> 8) & 0x3F);
+        header[4] = Hamming.Encode84(low & 15);
+        header[5] = Hamming.Encode84(low >> 4);
+        header[6] = Hamming.Encode84(high & 15);
+        header[7] = Hamming.Encode84(high >> 4);
+    }
+
     public int TotalInstanceCount => _instances.Values.Sum(l => l.Count);
 
     public IReadOnlyList<PageInstance> AllInstances => _allInstances;
