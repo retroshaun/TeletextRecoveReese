@@ -14,10 +14,10 @@ Capture VBI, deconvolve and restore teletext from VHS tapes all in one cross-pla
 
 
 ## Realtime VBI capture and deconvolving chain
-Deconvolve data in real time and see teletext in the precise moment on the tape that's playing.<br>
+Deconvolve data in real time and see teletext in the exact moment on the tape that's playing.<br>
 No need to store data to disk and separately deconvolve it later. Do it all in one pass.<br>
-Or better yet, hot swap tapes to quickly date taped broadcasts.<br>
 Of course raw VBI can be stored for preservation if needed.<br>
+You can also hot swap tapes to quickly date taped broadcasts.<br>
 
 <img width="780" height="452" alt="TeletextRecoveReese preview" src="https://github.com/user-attachments/assets/4263db68-66a8-4cfc-b447-ec28574045d8" />
 
@@ -49,7 +49,7 @@ otherwise disappear. Thank you for helping keep the work moving.
 - Edit text, mosaics, control codes, national subsets, and X/26 diacritics.
 - Build a new squashed stream with configurable recovery filters.
 - Export restored work as `.t42`, PNG screenshots, or video.
-- Run on Windows, macOS, and Linux.
+- Runs on Windows, macOS, and Linux.
 
 ## Workspace
 
@@ -66,53 +66,31 @@ The editor uses one or two synchronized panes:
 - Show control-code bytes and hexadecimal values directly in the grid.
 - Show raw bytes across the complete current selection.
 - Toggle X/26 diacritic markers only when they are needed.
-- Inspect packet 8/30 status messages with transmitted text/background colours,
-  UTC/local date and time,
-  network ID and initial-page links via **Page → Broadcast service data…** when
-  a full broadcast is open. The modal dialog builds its history only when opened.
-- Browse every received service packet in stream order, copy a selected record,
-  and export all recovered service packets as CSV from the modal inspection dialog.
-- Keep the broadcast pane read-only to protect the source capture.
+- Inspect packet 8/30 status messages, UTC/local date and time,
+  network ID and initial-page links via **Page → Broadcast service data…**.
 
 ## Restoration workflow
 
 - Transfer any complete row from the broadcast into the squashed page.
 - Select a block, hold `Shift`, and use `Left` / `Right` to browse that block
   through every broadcast version.
-- Commit the final block as one undoable edit when `Shift` is released.
 - Copy a broadcast selection directly into the same position on the left.
 - Undo and redo independently for each restored page.
 - Add or delete pages and subpages.
-- Jump between matching pages in the two panes.
-- Drop a file anywhere in the window to open it automatically: single/squashed
-  T42 in the editable pane, repeated-page T42 in the full broadcast pane,
-  and raw `.vbi`/`.tbc` captures in deconvolution. T42 detection scans packet
-  headers without assembling pages and stops when an address repeats. VBI drops
-  always show the capture preset and sampling-offset chooser before deconvolution.
 
 ## Text, attributes, and mosaics
 
 - Type directly into the editable 40 × 25 grid.
 - Insert all Level 1 alpha and mosaic colours.
 - Edit mosaic cells with the six Teletext mosaic keys.
-- Choose the G0 national subset for the complete file or leave it on Auto.
-- Manual primary and secondary G0 choices stay selected when another file is
-  opened; changes apply to both the full-broadcast and squashed panes together.
-- Choose a **Secondary G0 subset** for ESC switching, including all 13 Latin national subsets (also Serbian/Croatian/Slovenian,
-  often called Yugoslav). Auto
-  reads X/28/0 or X/28/4 page designations and M/29/0 or M/29/4 magazine defaults;
-  page settings take priority. ESC alternates the two subsets within a row and
-  each new row starts with the primary subset. Polish can also be selected as
-  the primary subset. All 13 Latin national subsets are supported; non-Latin G0 families
-  (Cyrillic, Greek, Arabic and Hebrew) are not decoded yet.
+- Choose the G0 national subset for the complete file.
+- Choose a **Secondary G0 subset** for ESC switching.
 
 ## X/26 enhancements and diacritics
 
 - Type supported precomposed letters as a G0 base character plus X/26 enhancement.
 - Create, move, and delete Level 1.5 diacritics.
 - Drag and drop a diacritic to another cell.
-- Preserve existing raw enhancement chains when inserting new characters.
-- Replace unusable triplets without discarding unrelated enhancement data.
 - Inspect X/26 packets and decoded triplets in the enhancements sidebar.
 - Delete an individually selected triplet with undo support.
 
@@ -120,27 +98,7 @@ The editor uses one or two synchronized panes:
 
 - Create a squashed stream directly from an open full broadcast using filters.
 - Build consensus rows from repeated receptions and parity quality.
-- During squashing, consecutive header-only announcements for the same page and
-  subpage count as one reception, so repeated headers do not vote away its body.
-- By default, keep text rows only when present in more than half of the page
-  receptions, matching `vhs-teletext` row-presence voting. Enable **Keep
-  infrequently received rows** in the squash dialog to retain rare rows too.
-- Preserve X/26 packets selected from the available versions.
-- Enable **Detect rotating pages with the same address** to recover recurring
-  contents at any identical page/subcode as virtual subpages. This is off by
-  default. Repeated local patterns must be confirmed by stable differences
-  elsewhere in the body, with at least three copies and 10% of the original
-  address's receptions supporting each variant. Isolated errors do not create
-  subpages; without enough evidence, the normal squash uses all copies.
-  Ambiguous damaged copies are excluded only when distinct contents have been
-  confirmed. The first group retains its subcode; others use free subcodes,
-  which may exceed the source subpage filter. Detection is conservative and
-  may leave very rare or subtly different contents combined.
-- Optionally keep every live-capture VBI line as a vhs-teletext-compatible
-  all-zero T42 slot when no packet can be recovered.
-- Apply edited squashed pages back to every matching Full Broadcast occurrence
-  without moving line-aware slots or overwriting the archival source file.
-
+  
 ## Page bookmarks
 
 - Add a bookmark to any restored page or subpage.
@@ -150,14 +108,8 @@ The editor uses one or two synchronized panes:
 ## Display and workflow options
 
 - Choose any installed grid font; TIFAX is recommended.
-- Simulate Teletext flash with a real timer.
 - Move all three toolbars below the grids with **View > Toolbar on Bottom**.
 - Show or hide the X/26 and page-bookmark sidebar sections.
-- Optionally link the two visual halves of a double-height cell so selecting the
-  lower half edits its rendered upper source cell.
-- Remember display toggles, font, recent files, panes, selected pages, and video
-  settings between sessions.
-- Reopen up to ten recent files in the pane and page where they were last used.
 
 ## Export
 
@@ -189,9 +141,6 @@ Use `Ctrl` on Windows/Linux and `Cmd` on macOS.
 | `Q A Z W S X` | Toggle mosaic segments while editing a mosaic cell |
 | `Shift + transfer-row click` | Pin or unpin the row guide |
 
-Typing advances automatically through the editable grid. When the page-bookmark
-text field has focus, all typing and cursor keys remain inside that field.
-
 ## File format
 
 ### T42
@@ -204,8 +153,7 @@ text field has focus, all typing and cursor keys remain inside that field.
 ### DVB transport streams
 
 - MPEG-TS and M2TS imports locate valid DVB teletext PES services automatically.
-- EN 300 472 data units are converted directly to T42 without rendering, OCR, or
-  video transcoding.
+- Found EN 300 472 data units are converted directly to T42.
 
 ## Building from source
 
@@ -237,7 +185,6 @@ dotnet run --project TeletextRecoveReese -- -startnew
 
 - Current development version: **0.9.1**
 - Actively developed and used for real restoration work.
-- Core `.t42` loading, comparison, editing, squashing, and export are available.
 - Complete EN 300 706 coverage and broader interoperability testing are ongoing.
 - Licensed under GPL-3.0.
 
