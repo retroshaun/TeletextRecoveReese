@@ -312,3 +312,46 @@ try
     throw new Exception("FAILED: cancellation");
 }
 catch (OperationCanceledException) { Console.WriteLine("PASS: cancellation"); }
+
+// Swapping recovered rolls must move complete instances and encode their new
+// address without changing shared header controls or mutating source packets.
+{
+    var store = new PageStore();
+    PageInstance AddSwapInstance(int subpage, byte text)
+    {
+        var page = new TeletextPage { Magazine = 1, PageNumber = 0, SubPage = subpage };
+        var header = Packet(0);
+        header[5] = Hamming.Encode84(8); // C4
+        header[7] = Hamming.Encode84(12); // C5/C6
+        PageStore.RewriteSubpageHeader(header, subpage);
+        PageAssembler.ApplyRow(page, 0, header);
+        PageAssembler.ApplyRow(page, 1, Packet(1, text));
+        var instance = new PageInstance { Magazine = 1, PageNumber = 0, Subpage = subpage, Page = page };
+        instance.RowsReceived.Add(1);
+        instance.BroadcastRowPacketIndices[0] = text;
+        store.AddInstance(instance);
+        return instance;
+    }
+    var first = AddSwapInstance(1, (byte)'A');
+    var extra = AddSwapInstance(1, (byte)'B');
+    var second = AddSwapInstance(0x1234, (byte)'C');
+    var originalHeader = first.Page.RawRows[0]!;
+    byte[] originalBytes = (byte[])originalHeader.Clone();
+    if (!store.SwapSubpages(1, 0, 1, 0x1234)
+        || !ReferenceEquals(store.GetInstances(1, 0, 1).Single(), second)
+        || !store.GetInstances(1, 0, 0x1234).SequenceEqual(new[] { first, extra })
+        || first.Page.SubPage != 0x1234 || first.Subpage != 0x1234
+        || extra.VersionIndex != 1 || first.BroadcastRowPacketIndices[0] != 'A'
+        || !originalHeader.SequenceEqual(originalBytes))
+        throw new Exception("Swap lost instance data or mutated a source header");
+    var rewritten = first.Page.RawRows[0]!;
+    int low = Hamming.Decode84(rewritten[4]).Value | Hamming.Decode84(rewritten[5]).Value << 4;
+    int high = Hamming.Decode84(rewritten[6]).Value | Hamming.Decode84(rewritten[7]).Value << 4;
+    if (((low & 0x7F) | ((high & 0x3F) << 8)) != 0x1234 || (low & 0x80) != 0x80 || (high & 0xC0) != 0xC0)
+        throw new Exception("Swap changed shared header controls or encoded the wrong subpage");
+    if (store.SwapSubpages(1, 0, 1, 1) || store.SwapSubpages(1, 0, 1, 9)
+        || !store.SwapSubpages(1, 0, 1, 0x1234) || first.Page.SubPage != 1
+        || !ReferenceEquals(store.GetInstances(1, 0, 1)[0], first))
+        throw new Exception("Swap validation or reverse swap failed");
+    Console.WriteLine("PASS: subpage swap preserves content, versions, source mapping and header controls");
+}

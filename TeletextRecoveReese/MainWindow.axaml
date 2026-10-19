@@ -93,6 +93,7 @@
                 <NativeMenu>
                     <NativeMenuItem Header="New page" Gesture="Meta+N" Click="OnNativeNewPageClicked" />
                     <NativeMenuItem Header="Delete current page" Click="OnNativeDeletePageClicked" />
+                    <NativeMenuItem Header="Swap subpages..." Click="OnNativeSwapSubpagesClicked" />
                     <NativeMenuItem Header="Create squashed stream" IsEnabled="False" Click="OnNativeCreateSquashedStreamClicked" />
                     <NativeMenuItem Header="Apply squashed repairs to full broadcast…" IsEnabled="False" Click="OnNativeApplySquashedRepairsClicked" />
                     <NativeMenuItemSeparator/>
@@ -251,6 +252,7 @@
             <MenuItem Header="_Page">
                 <MenuItem Header="_New page" InputGesture="Ctrl+N" Click="OnNewPageClicked" />
                 <MenuItem Header="_Delete current page" Click="OnDeletePageClicked" />
+                <MenuItem Header="Swap subpages..." Click="OnSwapSubpagesClicked" />
                 <MenuItem x:Name="CreateSquashedStreamMenuItem" Header="Create _squashed stream" IsEnabled="False" Click="OnCreateSquashedStreamClicked" />
                 <MenuItem x:Name="ApplySquashedRepairsMenuItem" Header="Apply squashed repairs to _full broadcast..." IsEnabled="False" Click="OnApplySquashedRepairsClicked" />
                 <Separator/>

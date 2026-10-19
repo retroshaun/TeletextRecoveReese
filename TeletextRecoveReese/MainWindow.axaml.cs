@@ -11922,6 +11922,96 @@ public partial class MainWindow : Window
         return apply;
     }
 
+    private async void OnNativeSwapSubpagesClicked(object? sender, EventArgs e) =>
+        await ShowSwapSubpagesAsync();
+
+    private async void OnSwapSubpagesClicked(object? sender, RoutedEventArgs e) =>
+        await ShowSwapSubpagesAsync();
+
+    private async Task ShowSwapSubpagesAsync()
+    {
+        if (!TryGetSquashAddress(out var address))
+        {
+            await ShowMessageAsync("Swap subpages", "Select a page in the squashed document first.");
+            return;
+        }
+        int[] subpages = _squashStore.GetKnownSubpages(address.magazine, address.page).ToArray();
+        if (subpages.Length < 2)
+        {
+            await ShowMessageAsync("Swap subpages", "This squashed page needs at least two subpages to swap.");
+            return;
+        }
+
+        var left = new ComboBox { ItemsSource = subpages.Select(FormatSubpageLabel).ToArray(), SelectedIndex = Array.IndexOf(subpages, address.subpage), HorizontalAlignment = HorizontalAlignment.Stretch };
+        var right = new ComboBox { ItemsSource = subpages.Select(FormatSubpageLabel).ToArray(), SelectedIndex = Array.FindIndex(subpages, value => value != address.subpage), HorizontalAlignment = HorizontalAlignment.Stretch };
+        var leftPreview = new TeletextGridControl { IsHitTestVisible = false, SuppressFlash = true };
+        var rightPreview = new TeletextGridControl { IsHitTestVisible = false, SuppressFlash = true };
+        var swap = new Button { Content = "Swap", MinWidth = 90 };
+        var cancel = new Button { Content = "Cancel", MinWidth = 90 };
+        var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*"), ColumnSpacing = 16 };
+        StackPanel Side(ComboBox picker, TeletextGridControl preview) => new()
+        {
+            Spacing = 10,
+            Children = { picker, new Viewbox { Child = preview, Stretch = Stretch.Uniform, Height = 250 } },
+        };
+        columns.Children.Add(Side(left, leftPreview));
+        var arrow = new TextBlock { Text = "↔", FontSize = 24, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(arrow, 1);
+        columns.Children.Add(arrow);
+        var rightSide = Side(right, rightPreview);
+        Grid.SetColumn(rightSide, 2);
+        columns.Children.Add(rightSide);
+        var dialog = new Window
+        {
+            Title = "Swap subpages", Width = 850, SizeToContent = SizeToContent.Height,
+            CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20), Spacing = 16,
+                Children =
+                {
+                    new TextBlock { Text = $"Squashed page {address.magazine}{address.page:X2} — select two subpages to exchange their addresses." },
+                    columns,
+                    new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 10, Children = { cancel, swap } },
+                },
+            },
+        };
+        void Refresh()
+        {
+            leftPreview.Page = left.SelectedIndex >= 0 ? _squashStore.GetInstances(address.magazine, address.page, subpages[left.SelectedIndex])[0].Page : null;
+            rightPreview.Page = right.SelectedIndex >= 0 ? _squashStore.GetInstances(address.magazine, address.page, subpages[right.SelectedIndex])[0].Page : null;
+            swap.IsEnabled = left.SelectedIndex >= 0 && right.SelectedIndex >= 0 && left.SelectedIndex != right.SelectedIndex;
+        }
+        left.SelectionChanged += (_, _) => Refresh();
+        right.SelectionChanged += (_, _) => Refresh();
+        bool confirmed = false;
+        cancel.Click += (_, _) => dialog.Close();
+        swap.Click += (_, _) => { confirmed = true; dialog.Close(); };
+        Refresh();
+        await dialog.ShowDialog(this);
+        if (!confirmed) return;
+
+        int first = subpages[left.SelectedIndex];
+        int second = subpages[right.SelectedIndex];
+        if (!_squashStore.SwapSubpages(address.magazine, address.page, first, second)) return;
+        foreach (int subpage in new[] { first, second })
+        foreach (var instance in _squashStore.GetInstances(address.magazine, address.page, subpage))
+        {
+            // Undo states belong to the content and must retain its new address.
+            if (_pageHistories.TryGetValue(instance.Page, out var history))
+                foreach (var state in history.States)
+                    if (state.Rows[0] is { Length: 42 } header)
+                        PageStore.RewriteSubpageHeader(header, subpage);
+        }
+        _blockBrowseAddress = null;
+        _flashRollAddress = null;
+        _structuralDirty = true;
+        SelectSquashAddress(address);
+        SquashGrid.InvalidateVisual();
+        UpdateDirtyFromHistories();
+        UpdateSquashFileFooter();
+    }
+
     private async void OnNewPageClicked(object? sender, RoutedEventArgs e) =>
         await CreateNewPageAsync();
 
