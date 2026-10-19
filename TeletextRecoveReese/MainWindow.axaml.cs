@@ -420,6 +420,7 @@ public partial class MainWindow : Window
         public bool? ShowRawVbiPreview { get; set; }
         public bool? ShowVideoCapturePreview { get; set; }
         public bool? DisableLiveVbiVideoPreview { get; set; }
+        public bool LinuxVbiAsyncModeRead { get; set; }
         public bool? LinkPaneNavigation { get; set; }
         public bool? LinkDoubleHeightCells { get; set; }
         public bool? ShowLiveDeconvolvedPage { get; set; }
@@ -4862,6 +4863,12 @@ public partial class MainWindow : Window
             IsAutoDetected = true,
         });
         var interfaceCombo = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
+        var asyncModeReadCheckBox = new CheckBox
+        {
+            Content = "Async mode read",
+            IsVisible = OperatingSystem.IsLinux(),
+            IsChecked = _sessionState.LinuxVbiAsyncModeRead,
+        };
         var cardNameText = new TextBlock
         {
             Text = "Capture card: —",
@@ -4987,6 +4994,7 @@ public partial class MainWindow : Window
                                 {
                                     new TextBlock { Text = "Capture card preset", FontWeight = FontWeight.SemiBold },
                                     presetCombo,
+                                    asyncModeReadCheckBox,
                                 },
                             },
                         },
@@ -5401,6 +5409,11 @@ public partial class MainWindow : Window
         }
 
         presetCombo.SelectionChanged += (_, _) => UpdateStartButton();
+        asyncModeReadCheckBox.IsCheckedChanged += (_, _) =>
+        {
+            _sessionState.LinuxVbiAsyncModeRead = asyncModeReadCheckBox.IsChecked == true;
+            SaveSessionState();
+        };
         recordRawVbiCheckBox.IsCheckedChanged += (_, _) =>
         {
             _sessionState.RecordRawVbiToDisk = recordRawVbiCheckBox.IsChecked == true;
@@ -5526,7 +5539,8 @@ public partial class MainWindow : Window
                     preset.FieldRangeStart, preset.FieldRangeEnd));
             else if (OperatingSystem.IsLinux() && linuxInput is not null && linuxStandard is not null)
                 input = new LinuxVbiCaptureStream(
-                    captureInterface.Path, linuxInput.Index, linuxStandard.Id);
+                    captureInterface.Path, linuxInput.Index, linuxStandard.Id,
+                    asyncModeRead: _sessionState.LinuxVbiAsyncModeRead);
             else if (OperatingSystem.IsWindows() && directShowInput is not null && directShowStandard is not null)
             {
                 bool enableVideoPreview = !(_sessionState.DisableLiveVbiVideoPreview ?? false);
@@ -5714,9 +5728,7 @@ public partial class MainWindow : Window
             int rawPreviewEnabled = showRawPreview ? 1 : 0;
             var showVideoPreviewCheckBox = new CheckBox
             {
-                Content = OperatingSystem.IsWindows()
-                    ? "Live video preview (real time)"
-                    : "Live video preview (every 5 seconds)",
+                Content = "Live video preview (real time)",
                 IsChecked = !disableVideoPreview && (_sessionState.ShowVideoCapturePreview ?? true),
                 IsEnabled = !disableVideoPreview
                             && (videoInterfacePath is not null || input is WindowsDirectShowVbiCaptureStream),
@@ -6578,7 +6590,7 @@ public partial class MainWindow : Window
                     {
                         await LinuxVbiCaptureStream.CaptureVideoFramesAsync(
                             videoInterfacePath,
-                            TimeSpan.FromSeconds(5),
+                            TimeSpan.Zero,
                             frame =>
                             {
                                 byte[] pixels = BuildVideoPreviewBgra(
@@ -6594,7 +6606,7 @@ public partial class MainWindow : Window
                                             videoPreviewWidth, videoPreviewHeight);
                                         videoPreviewImage.InvalidateVisual();
                                         videoPreviewInfoText.Text =
-                                            $"Raw video snapshot {frameNumber:N0} · {frame.Width}×{frame.Height} · {FourCc(frame.PixelFormat)} · {VideoFieldName(frame.Field)}"
+                                            $"Video frame {frameNumber:N0} · {frame.Width}×{frame.Height} · {FourCc(frame.PixelFormat)} · {VideoFieldName(frame.Field)}"
                                             + (Volatile.Read(ref videoPreviewEnabled) == 0 ? " · paused" : string.Empty);
                                     }
                                     catch (Exception ex)
@@ -6633,8 +6645,7 @@ public partial class MainWindow : Window
                 cancellation.Cancel();
                 videoPreviewCancellation.Cancel();
                 StopVideoPreviewPipe();
-                // A V4L2 read can be blocked waiting for the next complete frame;
-                // closing the device guarantees that Stop does not wait forever.
+                // Cancel the synchronous readiness wait and release the device.
                 try { input.Dispose(); } catch { }
                 stopButton.IsEnabled = false;
                 phaseText.Text = fileMode ? "Aborting…" : "Stopping live capture…";

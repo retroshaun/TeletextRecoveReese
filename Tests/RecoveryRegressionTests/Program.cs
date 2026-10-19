@@ -303,6 +303,7 @@ if (args.Length > 0)
 CharacterSetRegressions.Run();
 await CaptureDetectionRegressions.RunAsync();
 await FileVbiCaptureRegressions.RunAsync();
+await LinuxVbiReadRegressions.RunAsync();
 BroadcastServiceRegressions.Run();
 
 var cancelled = new CancellationToken(true);

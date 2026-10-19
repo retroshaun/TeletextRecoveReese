@@ -59,6 +59,7 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
     private const uint YuyvFourCc = 0x56595559; // YUYV
     private const uint GreyFourCc = 0x59455247; // GREY
     private readonly FileStream _device;
+    public bool AsyncModeRead { get; }
     private readonly byte[] _frame;
     private int _frameOffset;
     private int _frameLength;
@@ -72,13 +73,16 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
     public uint SampleFormat { get; }
     public override Action<byte[]>? RawFrameCaptured { get; set; }
 
-    public LinuxVbiCaptureStream(string path, int? inputIndex = null, ulong? standardId = null)
+    public LinuxVbiCaptureStream(
+        string path, int? inputIndex = null, ulong? standardId = null,
+        bool asyncModeRead = false)
     {
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException("Raw V4L2 VBI capture is available on Linux.");
+        AsyncModeRead = asyncModeRead;
         _device = new FileStream(
             path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite,
-            bufferSize: 1, FileOptions.Asynchronous);
+            bufferSize: 1, asyncModeRead ? FileOptions.Asynchronous : FileOptions.None);
         if (inputIndex is int selectedInput)
             SetIntegerIoctl(_device.SafeFileHandle, VideoSetInput, selectedInput, "VIDIOC_S_INPUT", path);
         if (standardId is ulong selectedStandard)
@@ -370,17 +374,35 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
         Memory<byte> buffer,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (buffer.Length == 0) return 0;
         if (_frameOffset >= _frameLength)
         {
             _frameOffset = 0;
             _frameLength = 0;
-            while (_frameLength < _frame.Length)
+            try
             {
-                int read = await _device.ReadAsync(
-                    _frame.AsMemory(_frameLength), cancellationToken).ConfigureAwait(false);
-                if (read == 0) return 0;
-                _frameLength += read;
+                if (AsyncModeRead)
+                {
+                    while (_frameLength < _frame.Length)
+                    {
+                        int read = await _device.ReadAsync(
+                            _frame.AsMemory(_frameLength), cancellationToken).ConfigureAwait(false);
+                        if (read == 0) return 0;
+                        _frameLength += read;
+                    }
+                }
+                else if (!await Task.Run(
+                             () => ReadFrameSynchronously(cancellationToken), cancellationToken)
+                             .ConfigureAwait(false))
+                    return 0;
             }
+            catch (Exception ex) when (cancellationToken.IsCancellationRequested
+                                       && ex is IOException or ObjectDisposedException)
+            {
+                throw new OperationCanceledException("VBI capture stopped.", ex, cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _capturedFrames);
             // The callback runs synchronously before this frame buffer can be
             // refilled, so consumers can render it without an extra 25 fps clone.
@@ -393,8 +415,41 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
         return count;
     }
 
+    private bool ReadFrameSynchronously(CancellationToken cancellationToken)
+    {
+        // Keep a blocking descriptor and use ordinary read(), for drivers that
+        // cannot be read through FileStream's asynchronous path. Poll only waits
+        // for readiness; it does not switch the device to nonblocking mode.
+        while (_frameLength < _frame.Length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var descriptor = new PollDescriptor
+            {
+                FileDescriptor = _device.SafeFileHandle.DangerousGetHandle().ToInt32(),
+                Events = 1, // POLLIN
+            };
+            int ready = poll(ref descriptor, 1, 100);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ready == 0) continue;
+            if (ready < 0)
+            {
+                int error = Marshal.GetLastPInvokeError();
+                if (error == 4) continue; // EINTR
+                throw new IOException($"VBI poll failed (errno {error}).");
+            }
+            if ((descriptor.ReturnedEvents & (1 | 16)) == 0) // POLLIN or POLLHUP (EOF)
+                throw new IOException($"VBI device is not readable (poll events 0x{descriptor.ReturnedEvents:X}).");
+            int read = _device.Read(_frame, _frameLength, _frame.Length - _frameLength);
+            if (read == 0) return false;
+            _frameLength += read;
+        }
+        return true;
+    }
+
     public override int Read(byte[] buffer, int offset, int count) =>
         ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
     public override void Flush() { }
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
     public override void SetLength(long value) => throw new NotSupportedException();
@@ -408,4 +463,15 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
 
     [DllImport("libc", SetLastError = true)]
     private static extern int ioctl(int fd, ulong request, IntPtr argument);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PollDescriptor
+    {
+        public int FileDescriptor;
+        public short Events;
+        public short ReturnedEvents;
+    }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int poll(ref PollDescriptor descriptor, nuint count, int timeout);
 }
