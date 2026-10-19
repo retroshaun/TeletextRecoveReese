@@ -304,6 +304,7 @@ CharacterSetRegressions.Run();
 await CaptureDetectionRegressions.RunAsync();
 await FileVbiCaptureRegressions.RunAsync();
 await LinuxVbiReadRegressions.RunAsync();
+LinuxVideoFormatRegressions.Run();
 BroadcastServiceRegressions.Run();
 
 var cancelled = new CancellationToken(true);

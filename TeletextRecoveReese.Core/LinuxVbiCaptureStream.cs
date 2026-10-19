@@ -48,6 +48,7 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
 {
     private const uint VbiCaptureType = 4;
     private const ulong VideoQueryCapabilities = 0x80685600;
+    private const ulong VideoEnumerateFormat = 0xC0405602;
     private const ulong VideoEnumerateStandard = 0xC0485619;
     private const ulong VideoGetStandard = 0x80085617;
     private const ulong VideoSetStandard = 0x40085618;
@@ -57,6 +58,9 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
     private const ulong VideoGetFormat = 0xC0D05604;
     private const ulong VideoSetFormat = 0xC0D05605;
     private const uint YuyvFourCc = 0x56595559; // YUYV
+    private const uint UyvyFourCc = 0x59565955; // UYVY
+    private const uint Yu12FourCc = 0x32315559; // YU12
+    private const uint Yv12FourCc = 0x32315659; // YV12
     private const uint GreyFourCc = 0x59455247; // GREY
     private readonly FileStream _device;
     public bool AsyncModeRead { get; }
@@ -221,38 +225,53 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
         string path,
         TimeSpan snapshotInterval,
         Func<LinuxV4l2VideoFrame, bool> receiveFrame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? inputIndex = null,
+        ulong? standardId = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var device = new FileStream(
             path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite,
-            bufferSize: 1, FileOptions.Asynchronous);
+            bufferSize: 1, FileOptions.None);
         using (device)
         using (cancellationToken.Register(() =>
                {
                    try { device.Dispose(); } catch { }
                }))
         {
+            // Apply routing on the video handle that will actually read frames.
+            // Avoid reconfiguring a shared decoder when VBI is already capturing
+            // with the requested input and standard.
+            if (inputIndex is int selectedInput
+                && GetIntegerIoctl(device.SafeFileHandle, VideoGetInput, "VIDIOC_G_INPUT", path) != selectedInput)
+                SetIntegerIoctl(device.SafeFileHandle, VideoSetInput, selectedInput, "VIDIOC_S_INPUT", path);
+            if (standardId is ulong selectedStandard
+                && GetUInt64Ioctl(device.SafeFileHandle, VideoGetStandard, "VIDIOC_G_STD", path) != selectedStandard)
+                SetUInt64Ioctl(device.SafeFileHandle, VideoSetStandard, selectedStandard, "VIDIOC_S_STD", path);
+
             var format = new byte[208];
             BitConverter.TryWriteBytes(format.AsSpan(0, 4), 1u); // V4L2_BUF_TYPE_VIDEO_CAPTURE
             InvokeBufferIoctl(device.SafeFileHandle, VideoGetFormat, format, "VIDIOC_G_FMT", path);
 
-            // Prefer packed 4:2:2 for snapshots. Several older analogue capture
-            // drivers expose interlaced YU12 with a driver-specific chroma layout;
-            // luma then looks correct while ordinary planar conversion produces
-            // bright green horizontal bands. Packed YUYV has no separate chroma
-            // planes and is both cheap and unambiguous to convert locally.
-            if (BitConverter.ToUInt32(format, 16) != YuyvFourCc)
+            var supportedFormats = new List<uint>();
+            for (uint index = 0; ; index++)
             {
-                var packedFormat = (byte[])format.Clone();
-                BitConverter.TryWriteBytes(packedFormat.AsSpan(16, 4), YuyvFourCc);
-                BitConverter.TryWriteBytes(packedFormat.AsSpan(24, 4), 0u); // bytesperline: driver chooses
-                BitConverter.TryWriteBytes(packedFormat.AsSpan(28, 4), 0u); // sizeimage: driver chooses
-                if (TryBufferIoctl(device.SafeFileHandle, VideoSetFormat, packedFormat, out _) &&
-                    BitConverter.ToUInt32(packedFormat, 16) == YuyvFourCc)
+                var description = new byte[64];
+                BitConverter.TryWriteBytes(description.AsSpan(0, 4), index);
+                BitConverter.TryWriteBytes(description.AsSpan(4, 4), 1u); // VIDEO_CAPTURE
+                if (!TryBufferIoctl(device.SafeFileHandle, VideoEnumerateFormat, description, out int error))
                 {
-                    format = packedFormat;
+                    if (error == 22) break; // EINVAL ends VIDIOC_ENUM_FMT enumeration.
+                    throw new IOException($"VIDIOC_ENUM_FMT failed for {path} (errno {error}).");
                 }
+                supportedFormats.Add(BitConverter.ToUInt32(description, 44));
             }
+            format = NegotiateVideoPreviewFormat(format, supportedFormats, candidate =>
+            {
+                if (TryBufferIoctl(device.SafeFileHandle, VideoSetFormat, candidate, out int error)) return true;
+                if (error == 22) return false; // Try the next supported format.
+                throw new IOException($"VIDIOC_S_FMT failed for {path} (errno {error}).");
+            });
 
             int width = checked((int)BitConverter.ToUInt32(format, 8));
             int height = checked((int)BitConverter.ToUInt32(format, 12));
@@ -275,12 +294,16 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
                     // A V4L2 read represents one frame. Never concatenate short
                     // reads: that can splice two frames and shifts the U/V planes,
                     // which appears as intermittent green horizontal bands.
-                    read = await device.ReadAsync(frame, cancellationToken)
-                        .ConfigureAwait(false);
+                    read = await Task.Run(() =>
+                    {
+                        WaitForDeviceReadable(device, cancellationToken);
+                        return device.Read(frame, 0, frame.Length);
+                    }, cancellationToken).ConfigureAwait(false);
                 }
-                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+                catch (Exception ex) when (cancellationToken.IsCancellationRequested
+                                           && ex is IOException or ObjectDisposedException)
                 {
-                    throw new OperationCanceledException(cancellationToken);
+                    throw new OperationCanceledException("Video preview stopped.", ex, cancellationToken);
                 }
                 if (read == 0)
                     throw new EndOfStreamException($"{path} stopped returning video frames.");
@@ -304,6 +327,34 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
                 nextSnapshot = now + intervalTicks;
             }
         }
+    }
+
+    private static byte[] NegotiateVideoPreviewFormat(
+        byte[] currentFormat, IReadOnlyList<uint> supportedFormats, Func<byte[], bool> trySetFormat)
+    {
+        static bool CanDisplay(uint format) =>
+            format is YuyvFourCc or UyvyFourCc or Yu12FourCc or Yv12FourCc or GreyFourCc;
+
+        // Prefer packed colour, then retain the current raw format where possible.
+        // Only request formats actually advertised by this video capture node.
+        uint current = BitConverter.ToUInt32(currentFormat, 16);
+        uint[] preferences = [YuyvFourCc, UyvyFourCc, current, Yu12FourCc, Yv12FourCc, GreyFourCc];
+        bool attempted = false;
+        foreach (uint pixelFormat in preferences.Distinct().Where(format =>
+                     CanDisplay(format) && supportedFormats.Contains(format)))
+        {
+            attempted = true;
+            var candidate = (byte[])currentFormat.Clone();
+            BitConverter.TryWriteBytes(candidate.AsSpan(16, 4), pixelFormat);
+            BitConverter.TryWriteBytes(candidate.AsSpan(24, 4), 0u); // driver chooses stride
+            BitConverter.TryWriteBytes(candidate.AsSpan(28, 4), 0u); // driver chooses size
+            // S_FMT initializes capture even if G_FMT already reported this format.
+            if (trySetFormat(candidate) && CanDisplay(BitConverter.ToUInt32(candidate, 16)))
+                return candidate;
+        }
+        if (!attempted)
+            throw new NotSupportedException("The video device does not advertise a pixel format supported by the live preview.");
+        throw new IOException("The video device could not initialize any supported live preview format.");
     }
 
     private static byte[] InvokeBufferIoctl(
@@ -422,10 +473,22 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
         // for readiness; it does not switch the device to nonblocking mode.
         while (_frameLength < _frame.Length)
         {
+            WaitForDeviceReadable(_device, cancellationToken);
+            int read = _device.Read(_frame, _frameLength, _frame.Length - _frameLength);
+            if (read == 0) return false;
+            _frameLength += read;
+        }
+        return true;
+    }
+
+    private static void WaitForDeviceReadable(FileStream device, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
             cancellationToken.ThrowIfCancellationRequested();
             var descriptor = new PollDescriptor
             {
-                FileDescriptor = _device.SafeFileHandle.DangerousGetHandle().ToInt32(),
+                FileDescriptor = device.SafeFileHandle.DangerousGetHandle().ToInt32(),
                 Events = 1, // POLLIN
             };
             int ready = poll(ref descriptor, 1, 100);
@@ -435,15 +498,12 @@ public sealed class LinuxVbiCaptureStream : LiveVbiCaptureStream
             {
                 int error = Marshal.GetLastPInvokeError();
                 if (error == 4) continue; // EINTR
-                throw new IOException($"VBI poll failed (errno {error}).");
+                throw new IOException($"Capture device poll failed (errno {error}).");
             }
             if ((descriptor.ReturnedEvents & (1 | 16)) == 0) // POLLIN or POLLHUP (EOF)
-                throw new IOException($"VBI device is not readable (poll events 0x{descriptor.ReturnedEvents:X}).");
-            int read = _device.Read(_frame, _frameLength, _frame.Length - _frameLength);
-            if (read == 0) return false;
-            _frameLength += read;
+                throw new IOException($"Capture device is not readable (poll events 0x{descriptor.ReturnedEvents:X}).");
+            return;
         }
-        return true;
     }
 
     public override int Read(byte[] buffer, int offset, int count) =>

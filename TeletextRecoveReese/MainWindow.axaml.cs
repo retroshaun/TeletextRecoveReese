@@ -5048,10 +5048,10 @@ public partial class MainWindow : Window
         LinuxV4l2DeviceInfo? selectedDevice = null;
         DirectShowDeviceInfo? selectedDirectShowDevice = null;
         string? selectedVideoInterface = null;
-        Process? previewProcess = null;
+        Task linuxPreviewTask = Task.CompletedTask;
         WindowsDirectShowPreview? directShowPreview = null;
         LatestUiPreview<DirectShowPreviewFrame>? directShowPreviewUpdates = null;
-        LatestUiPreview<byte[]>? mjpegPreviewUpdates = null;
+        LatestUiPreview<byte[]>? linuxPreviewUpdates = null;
         CancellationTokenSource? previewCancellation = null;
         int previewGeneration = 0;
         bool suppressInterfaceSelection = false;
@@ -5068,19 +5068,13 @@ public partial class MainWindow : Window
         {
             directShowPreviewUpdates?.Clear();
             directShowPreviewUpdates = null;
-            mjpegPreviewUpdates?.Clear();
-            mjpegPreviewUpdates = null;
+            linuxPreviewUpdates?.Clear();
+            linuxPreviewUpdates = null;
             directShowPreview?.Dispose();
             directShowPreview = null;
             previewCancellation?.Cancel();
             previewCancellation?.Dispose();
             previewCancellation = null;
-            if (previewProcess is { HasExited: false })
-            {
-                try { previewProcess.Kill(entireProcessTree: true); } catch { }
-            }
-            previewProcess?.Dispose();
-            previewProcess = null;
             previewGeneration++;
         }
 
@@ -5088,6 +5082,9 @@ public partial class MainWindow : Window
         {
             if (suppressPreviewRestart) return;
             StopPreview();
+            int restartGeneration = previewGeneration;
+            await linuxPreviewTask;
+            if (restartGeneration != previewGeneration) return;
             ClearPreviewImage();
             if (disableVideoPreview)
             {
@@ -5156,67 +5153,58 @@ public partial class MainWindow : Window
                 || standardCombo.SelectedItem is not LinuxV4l2Standard selectedStandard)
                 return;
 
-            if (_ffmpegPath is null)
-            {
-                previewStatusText.Text = "FFmpeg was not found; live video preview is unavailable.";
-                return;
-            }
-
             int generation = ++previewGeneration;
-            previewStatusText.Text = $"Opening preview from {selectedVideoInterface}…";
-            try
+            string videoPath = selectedVideoInterface;
+            previewStatusText.Text = $"Opening preview from {videoPath}…";
+            previewCancellation = new CancellationTokenSource();
+            CancellationToken token = previewCancellation.Token;
+            const int previewWidth = 440;
+            const int previewHeight = 330;
+            var nativePreviewUpdates = new LatestUiPreview<byte[]>(pixels =>
             {
-                await Task.Run(() => LinuxVbiCaptureStream.ConfigureDevice(
-                    selectedDevice.Path, selectedInput.Index, selectedStandard.Id));
                 if (generation != previewGeneration) return;
-
-                var startInfo = new ProcessStartInfo
+                try
                 {
-                    FileName = _ffmpegPath,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true,
-                };
-                foreach (string argument in new[]
-                         {
-                             "-hide_banner", "-loglevel", "error", "-nostdin",
-                             "-f", "video4linux2", "-i", selectedVideoInterface,
-                             "-vf", "yadif=0:-1:0,fps=25,scale=440:330,setsar=1",
-                             "-f", "image2pipe",
-                             "-vcodec", "mjpeg", "pipe:1",
-                         })
-                    startInfo.ArgumentList.Add(argument);
-
-                previewProcess = Process.Start(startInfo)
-                    ?? throw new InvalidOperationException("Could not start FFmpeg video preview.");
-                previewProcess.BeginErrorReadLine();
-                previewCancellation = new CancellationTokenSource();
-                CancellationToken token = previewCancellation.Token;
-                previewStatusText.Text = $"Live preview · 4:3 · 25 fps · {selectedVideoInterface} · {selectedInput.Name} · {selectedStandard.Name}";
-                var previewUpdates = new LatestUiPreview<byte[]>(frame =>
-                {
-                    if (generation != previewGeneration) return;
-                    try
+                    if (previewImage.Source is not WriteableBitmap bitmap)
                     {
-                        using var stream = new MemoryStream(frame, writable: false);
-                        var bitmap = new Bitmap(stream);
-                        if (previewImage.Source is IDisposable oldSource)
-                            oldSource.Dispose();
+                        bitmap = new WriteableBitmap(
+                            new PixelSize(previewWidth, previewHeight),
+                            new Vector(96, 96), PixelFormats.Bgra8888, AlphaFormat.Opaque);
                         previewImage.Source = bitmap;
                     }
-                    catch { }
-                });
-                mjpegPreviewUpdates = previewUpdates;
-                _ = ReadMjpegFramesAsync(
-                    previewProcess.StandardOutput.BaseStream, token,
-                    frame => previewUpdates.Post(frame));
-            }
-            catch (Exception ex)
+                    UpdateBgraBitmap(bitmap, pixels, previewWidth, previewHeight);
+                    previewImage.InvalidateVisual();
+                    previewStatusText.Text = $"Live preview · 4:3 · {videoPath} · {selectedInput.Name} · {selectedStandard.Name}";
+                }
+                catch (Exception ex)
+                {
+                    previewStatusText.Text = $"Video preview frame failed: {ex.Message}";
+                }
+            });
+            linuxPreviewUpdates = nativePreviewUpdates;
+            linuxPreviewTask = Task.Run(async () =>
             {
-                if (generation == previewGeneration)
-                    previewStatusText.Text = $"Video preview unavailable: {ex.Message}";
-            }
+                try
+                {
+                    await LinuxVbiCaptureStream.CaptureVideoFramesAsync(
+                        videoPath, TimeSpan.Zero,
+                        frame =>
+                        {
+                            nativePreviewUpdates.Post(BuildVideoPreviewBgra(frame, previewWidth, previewHeight));
+                            return !token.IsCancellationRequested;
+                        },
+                        token, selectedInput.Index, selectedStandard.Id).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                catch (Exception ex)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (generation == previewGeneration && !token.IsCancellationRequested)
+                            previewStatusText.Text = $"Video preview unavailable: {ex.Message}";
+                    });
+                }
+            });
         }
 
         void UpdateStartButton()
@@ -5464,6 +5452,7 @@ public partial class MainWindow : Window
                 ?? (directShowStandard is null ? null : (ulong)(int)directShowStandard.Value);
             SaveSessionState();
             StopPreview();
+            await linuxPreviewTask;
             dialog.Close();
             if (OperatingSystem.IsLinux())
                 await StartLiveVbiCaptureAsync(
@@ -6619,7 +6608,9 @@ public partial class MainWindow : Window
                                 // frozen frame and immediately close /dev/video.
                                 return Volatile.Read(ref videoPreviewEnabled) != 0;
                             },
-                            pipeToken).ConfigureAwait(false);
+                            pipeToken,
+                            inputIndex: linuxInput?.Index,
+                            standardId: linuxStandard?.Id).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (pipeToken.IsCancellationRequested)
                     {
@@ -7229,79 +7220,6 @@ public partial class MainWindow : Window
             }
         }
         return null;
-    }
-
-    private static async Task ReadMjpegFramesAsync(
-        Stream input,
-        CancellationToken cancellationToken,
-        Action<byte[]> reportFrame)
-    {
-        var readBuffer = new byte[32 * 1024];
-        MemoryStream? frame = null;
-        bool previousWasFf = false;
-        try
-        {
-            while (true)
-            {
-                int count = await input.ReadAsync(readBuffer, cancellationToken).ConfigureAwait(false);
-                if (count == 0) break;
-                for (int index = 0; index < count; index++)
-                {
-                    byte value = readBuffer[index];
-                    if (frame is null)
-                    {
-                        if (previousWasFf && value == 0xD8)
-                        {
-                            frame = new MemoryStream(256 * 1024);
-                            frame.WriteByte(0xFF);
-                            frame.WriteByte(0xD8);
-                            previousWasFf = false;
-                        }
-                        else
-                        {
-                            previousWasFf = value == 0xFF;
-                        }
-                        continue;
-                    }
-
-                    frame.WriteByte(value);
-                    if (previousWasFf && value == 0xD9)
-                    {
-                        reportFrame(frame.ToArray());
-                        frame.Dispose();
-                        frame = null;
-                        previousWasFf = false;
-                    }
-                    else
-                    {
-                        previousWasFf = value == 0xFF;
-                        if (frame.Length > 8 * 1024 * 1024)
-                        {
-                            frame.Dispose();
-                            frame = null;
-                            previousWasFf = false;
-                        }
-                    }
-                }
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (IOException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (IOException)
-        {
-            // FFmpeg closed its image pipe or the capture device stopped producing frames.
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-        finally
-        {
-            frame?.Dispose();
-        }
     }
 
     private static byte[] BuildVideoPreviewBgra(
