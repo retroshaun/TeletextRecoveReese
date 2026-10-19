@@ -13,7 +13,7 @@ public sealed record VbiCaptureOptions(
     float StandardDeviationThreshold = 14,
     float SignalLevelThreshold = 64,
     float CriFcRangeThreshold = 28,
-    double CriFcConfidenceThreshold = 0.35,
+    double CriFcConfidenceThreshold = 0.20,
     bool KeepEmptyPackets = false,
     // Samples after resampling to eight samples per bit, matching vhs-teletext.
     int ExtraRoll = 0);

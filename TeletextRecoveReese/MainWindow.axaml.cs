@@ -157,7 +157,9 @@ public partial class MainWindow : Window
     {
         private volatile bool _enabled = enabled;
         private readonly object _dispatchLock = new();
-        private IReadOnlyList<byte[]>? _pending;
+        private const int MaximumPendingPackets = 8192;
+        private static readonly TimeSpan RefreshInterval = TimeSpan.FromMilliseconds(200);
+        private readonly List<byte[]> _pending = new();
         private bool _dispatchQueued;
 
         public bool Enabled
@@ -168,7 +170,10 @@ public partial class MainWindow : Window
                 _enabled = value;
                 if (value) return;
                 lock (_dispatchLock)
-                    _pending = null;
+                {
+                    _pending.Clear();
+                    System.Threading.Monitor.PulseAll(_dispatchLock);
+                }
             }
         }
 
@@ -179,37 +184,47 @@ public partial class MainWindow : Window
             if (!_enabled) return;
             lock (_dispatchLock)
             {
-                // Live display updates are expendable: the complete stream is
-                // written to disk independently. Keep only the newest batch while
-                // the UI is busy instead of growing an unbounded dispatcher queue.
-                _pending = value;
+                // Page assembly needs every packet, even when painting is slower
+                // than decoding. Batch updates and apply backpressure rather than
+                // dropping headers or body rows while the UI is busy.
+                while (_enabled && _pending.Count >= MaximumPendingPackets)
+                    System.Threading.Monitor.Wait(_dispatchLock);
+                if (!_enabled) return;
+                _pending.AddRange(value);
                 if (_dispatchQueued) return;
                 _dispatchQueued = true;
             }
-            Dispatcher.UIThread.Post(Drain, DispatcherPriority.Background);
+            Dispatcher.UIThread.Post(ScheduleDrain, DispatcherPriority.Background);
         }
+
+        private void ScheduleDrain() => DispatcherTimer.RunOnce(
+            Drain, RefreshInterval, DispatcherPriority.Background);
 
         private void Drain()
         {
-            IReadOnlyList<byte[]>? value;
+            byte[][] value;
             lock (_dispatchLock)
             {
-                value = _pending;
-                _pending = null;
+                value = _pending.ToArray();
+                _pending.Clear();
+                System.Threading.Monitor.PulseAll(_dispatchLock);
             }
 
-            if (_enabled && value is not null)
+            if (_enabled && value.Length > 0)
                 handler(value);
 
             lock (_dispatchLock)
             {
-                if (_enabled && _pending is not null)
-                    Dispatcher.UIThread.Post(Drain, DispatcherPriority.Background);
+                if (_enabled && _pending.Count > 0)
+                    ScheduleDrain();
                 else
                     _dispatchQueued = false;
             }
         }
     }
+
+    private static bool HasPreviewBody(TeletextPage page) =>
+        page.RawRows.Skip(1).Take(24).Any(row => row is not null);
 
     private readonly PageStore _store = new();
     private readonly PageStore _squashStore = new();
@@ -395,6 +410,7 @@ public partial class MainWindow : Window
         public bool? ShowVideoBookmarks { get; set; }
         public List<RecentFileEntry> RecentFiles { get; set; } = new();
         public List<CaptureCardPreset> CustomCaptureCardPresets { get; set; } = new();
+        public int CapturePresetDefaultsVersion { get; set; }
         public int? VbiExtraRoll { get; set; }
         public bool? VbiAdvancedMode { get; set; }
         public string? LastCaptureCardPresetName { get; set; }
@@ -434,7 +450,7 @@ public partial class MainWindow : Window
         public float StandardDeviationThreshold { get; set; } = 14;
         public float SignalLevelThreshold { get; set; } = 64;
         public float CriFcRangeThreshold { get; set; } = 28;
-        public double CriFcConfidenceThreshold { get; set; } = 0.35;
+        public double CriFcConfidenceThreshold { get; set; } = 0.20;
         public bool IsBuiltIn { get; set; }
         public bool IsAutoDetected { get; set; }
 
@@ -548,11 +564,11 @@ public partial class MainWindow : Window
     private static readonly CaptureCardPreset[] BuiltInCaptureCardPresets =
     {
         new() { Name = "SAA7131 PCI", Chipset = "SAA7131", Interface = "PCI", SampleRate = 27000000, LineLength = 2048, LineStart = 0, LineStartEnd = 60, SampleType = "UInt8", FieldLines = 17, FieldRangeStart = 0, FieldRangeEnd = 16, IsBuiltIn = true },
-        new() { Name = "SAA7131 USB", Chipset = "SAA7131", Interface = "USB", SampleRate = 27000000, LineLength = 1440, LineStart = 0, LineStartEnd = 20, SampleType = "UInt8", FieldLines = 16, FieldRangeStart = 0, FieldRangeEnd = 16, IsBuiltIn = true },
+        new() { Name = "SAA7131 USB", Chipset = "SAA7131", Interface = "USB", SampleRate = 27000000, LineLength = 1440, LineStart = 0, LineStartEnd = 60, SampleType = "UInt8", FieldLines = 16, FieldRangeStart = 0, FieldRangeEnd = 16, IsBuiltIn = true },
         new() { Name = "SAA7135 PCI", Chipset = "SAA7135", Interface = "PCI / DirectShow", SampleRate = 27000000, LineLength = 1600, LineStart = 0, LineStartEnd = 60, SampleType = "UInt8", FieldLines = 18, FieldRangeStart = 0, FieldRangeEnd = 18, IsBuiltIn = true },
-        new() { Name = "August VGB100 USB", Chipset = "August VGB100", Interface = "USB", SampleRate = 27000000, LineLength = 1440, LineStart = 0, LineStartEnd = 20, SampleType = "UInt8", FieldLines = 16, FieldRangeStart = 0, FieldRangeEnd = 16, IsBuiltIn = true },
-        new() { Name = "Elgato Video Capture (0FD9:0033)", Chipset = "Empia EM2860 + SAA711x", Interface = "USB", SampleRate = 13500000, LineLength = 720, LineStart = 0, LineStartEnd = 20, SampleType = "UInt8", FieldLines = 18, FieldRangeStart = 0, FieldRangeEnd = 18, IsBuiltIn = true },
-        new() { Name = "Elgato Video Capture V2 (0FD9:0037)", Chipset = "Conexant CX231xx", Interface = "USB", SampleRate = 27000000, LineLength = 1440, LineStart = 0, LineStartEnd = 20, SampleType = "UInt8", FieldLines = 18, FieldRangeStart = 0, FieldRangeEnd = 18, IsBuiltIn = true },
+        new() { Name = "August VGB100 USB", Chipset = "August VGB100", Interface = "USB", SampleRate = 27000000, LineLength = 1440, LineStart = 0, LineStartEnd = 60, SampleType = "UInt8", FieldLines = 16, FieldRangeStart = 0, FieldRangeEnd = 16, IsBuiltIn = true },
+        new() { Name = "Elgato Video Capture (0FD9:0033)", Chipset = "Empia EM2860 + SAA711x", Interface = "USB", SampleRate = 13500000, LineLength = 720, LineStart = 0, LineStartEnd = 60, SampleType = "UInt8", FieldLines = 18, FieldRangeStart = 0, FieldRangeEnd = 18, IsBuiltIn = true },
+        new() { Name = "Elgato Video Capture V2 (0FD9:0037)", Chipset = "Conexant CX231xx", Interface = "USB", SampleRate = 27000000, LineLength = 1440, LineStart = 0, LineStartEnd = 60, SampleType = "UInt8", FieldLines = 18, FieldRangeStart = 0, FieldRangeEnd = 18, IsBuiltIn = true },
         new() { Name = "BT8x8 PCI", Chipset = "BT8x8", Interface = "PCI", SampleRate = 35468950, LineLength = 2048, LineStart = 60, LineStartEnd = 130, SampleType = "UInt8", FieldLines = 16, FieldRangeStart = 0, FieldRangeEnd = 16, IsBuiltIn = true },
         new() { Name = "CX88 PCI", Chipset = "CX88", Interface = "PCI", SampleRate = 35468950, LineLength = 2048, LineStart = 90, LineStartEnd = 150, SampleType = "UInt8", FieldLines = 18, FieldRangeStart = 1, FieldRangeEnd = 17, IsBuiltIn = true },
         new() { Name = "VHS-decode Full TBC", Chipset = "VHS-decode", Interface = "TBC file", SampleRate = 17730000, LineLength = 1135, LineStart = 160, LineStartEnd = 190, SampleType = "UInt16", FieldLines = 313, FieldRangeStart = 6, FieldRangeEnd = 22, IsBuiltIn = true },
@@ -651,10 +667,8 @@ public partial class MainWindow : Window
     private bool _updatingPageBookmarkList;
     private bool _pageBookmarkNavigationPending;
     private bool _previewingBroadcastVersion;
-    private int? _squashFileG0Subset;
-    private int? _broadcastFileG0Subset;
-    private int? _squashFileSecondaryG0Subset;
-    private int? _broadcastFileSecondaryG0Subset;
+    private int? _fileG0Subset;
+    private int? _fileSecondaryG0Subset;
     private int _pinnedTransferRowHighlight = -1;
     private bool _suppressNextTransferRowClick;
     private int _blockBrowseVersionIndex = -1;
@@ -762,6 +776,17 @@ public partial class MainWindow : Window
         SquashGrid.DiacriticDeleteRequested += OnDiacriticDeleteRequested;
         SquashGrid.EnhancementHoverChanged += OnEnhancementHoverChanged;
         BroadcastGrid.CellSelected += OnBroadcastGridCellSelected;
+        // Toolbar clicks and keyboard focus select a pane too; otherwise Page
+        // menu actions can still target the opposite pane until a cell is clicked.
+        SquashPaneGrid.AddHandler(PointerPressedEvent,
+            (_, _) => OnSquashGridCellSelected(SquashGrid, EventArgs.Empty), RoutingStrategies.Tunnel);
+        SquashPaneGrid.GotFocus += (_, _) => OnSquashGridCellSelected(SquashGrid, EventArgs.Empty);
+        if (BroadcastPaneGrid is { } broadcastPane)
+        {
+            broadcastPane.AddHandler(PointerPressedEvent,
+                (_, _) => OnBroadcastGridCellSelected(BroadcastGrid, EventArgs.Empty), RoutingStrategies.Tunnel);
+            broadcastPane.GotFocus += (_, _) => OnBroadcastGridCellSelected(BroadcastGrid, EventArgs.Empty);
+        }
         InitializeBlankSquashDocument();
         PrepareLoadLastSessionLayout();
         // Handle keyboard navigation in the tunnel phase, before the menu can
@@ -1692,7 +1717,7 @@ public partial class MainWindow : Window
         var criFcRangeThreshold = new NumericUpDown { Width = 250, Minimum = 0, Maximum = 255, Value = 28, Increment = 1 };
         var criFcConfidenceThreshold = new NumericUpDown
         {
-            Width = 250, Minimum = 0, Maximum = 1, Value = 0.35m,
+            Width = 250, Minimum = 0, Maximum = 1, Value = 0.20m,
             Increment = 0.01m, FormatString = "0.00",
         };
         if (initial is not null)
@@ -1813,7 +1838,7 @@ public partial class MainWindow : Window
                     StandardDeviationThreshold = (float)(stdDevThreshold.Value ?? 14),
                     SignalLevelThreshold = (float)(signalThreshold.Value ?? 64),
                     CriFcRangeThreshold = (float)(criFcRangeThreshold.Value ?? 28),
-                    CriFcConfidenceThreshold = (double)(criFcConfidenceThreshold.Value ?? 0.35m),
+                    CriFcConfidenceThreshold = (double)(criFcConfidenceThreshold.Value ?? 0.20m),
                 };
                 dialog.Close();
             }
@@ -3925,9 +3950,6 @@ public partial class MainWindow : Window
 
     private void ApplyG0SubsetSelection(string? selection, bool secondary = false)
     {
-        TeletextGridControl? grid = GetG0TargetGrid();
-        if (grid is null) return;
-
         int? selectedSubset;
         if (string.Equals(selection, "auto", StringComparison.OrdinalIgnoreCase))
             selectedSubset = null;
@@ -3940,29 +3962,23 @@ public partial class MainWindow : Window
         else
             return;
 
-        bool broadcast = grid == BroadcastGrid;
         if (secondary)
-        {
-            if (broadcast) _broadcastFileSecondaryG0Subset = selectedSubset;
-            else _squashFileSecondaryG0Subset = selectedSubset;
-        }
+            _fileSecondaryG0Subset = selectedSubset;
         else
-        {
-            if (broadcast) _broadcastFileG0Subset = selectedSubset;
-            else _squashFileG0Subset = selectedSubset;
-        }
+            _fileG0Subset = selectedSubset;
 
-        if (grid.Page is { } page) ApplyFileG0SubsetToPage(page, broadcast);
-        grid.InvalidateVisual();
-        if (grid == SquashGrid)
-            UpdateEnhancementList(grid.Page);
+        if (BroadcastGrid.Page is { } broadcastPage) ApplyFileG0SubsetToPage(broadcastPage);
+        if (SquashGrid.Page is { } squashPage) ApplyFileG0SubsetToPage(squashPage);
+        BroadcastGrid.InvalidateVisual();
+        SquashGrid.InvalidateVisual();
+        UpdateEnhancementList(SquashGrid.Page);
         UpdateG0SubsetMenuChecks();
     }
 
-    private void ApplyFileG0SubsetToPage(TeletextPage page, bool broadcast)
+    private void ApplyFileG0SubsetToPage(TeletextPage page)
     {
-        int? selectedSubset = broadcast ? _broadcastFileG0Subset : _squashFileG0Subset;
-        int? secondary = broadcast ? _broadcastFileSecondaryG0Subset : _squashFileSecondaryG0Subset;
+        int? selectedSubset = _fileG0Subset;
+        int? secondary = _fileSecondaryG0Subset;
         if (page.NationalOptionOverride == selectedSubset && page.SecondaryNationalOptionOverride == secondary) return;
         page.SecondaryNationalOptionOverride = secondary;
         PageAssembler.SetNationalOptionOverride(page, selectedSubset);
@@ -3970,9 +3986,7 @@ public partial class MainWindow : Window
 
     private void UpdateG0SubsetMenuChecks()
     {
-        TeletextGridControl? grid = GetG0TargetGrid();
-        bool broadcast = grid == BroadcastGrid;
-        int? selectedSubset = broadcast ? _broadcastFileG0Subset : _squashFileG0Subset;
+        int? selectedSubset = _fileG0Subset;
 
         foreach (MenuItem item in G0SubsetMenuItem.Items.OfType<MenuItem>())
             item.IsChecked = IsG0MenuSelectionChecked(item.CommandParameter?.ToString(), selectedSubset);
@@ -3982,7 +3996,7 @@ public partial class MainWindow : Window
             foreach (NativeMenuItem item in nativeMenu.Items.OfType<NativeMenuItem>())
                 item.IsChecked = IsG0MenuSelectionChecked(item.CommandParameter?.ToString(), selectedSubset);
         }
-        int? secondary = broadcast ? _broadcastFileSecondaryG0Subset : _squashFileSecondaryG0Subset;
+        int? secondary = _fileSecondaryG0Subset;
         foreach (MenuItem item in SecondaryG0SubsetMenuItem.Items.OfType<MenuItem>())
             item.IsChecked = IsG0MenuSelectionChecked(item.CommandParameter?.ToString(), secondary);
         if (_nativeSecondaryG0SubsetMenuItem?.Menu is { } secondaryMenu)
@@ -4000,13 +4014,6 @@ public partial class MainWindow : Window
         return int.TryParse(selection, out int option)
             && CharacterSets.IsNationalSubset(option)
             && selectedSubset == option;
-    }
-
-    private TeletextGridControl? GetG0TargetGrid()
-    {
-        if (SquashPaneGrid.IsVisible && !BroadcastPaneGrid.IsVisible) return SquashGrid;
-        if (BroadcastPaneGrid.IsVisible && !SquashPaneGrid.IsVisible) return BroadcastGrid;
-        return IsActiveGrid();
     }
 
     private void OnNativeChooseFontClicked(object? sender, EventArgs e) =>
@@ -5502,11 +5509,17 @@ public partial class MainWindow : Window
         DirectShowVideoStandard? directShowStandard,
         string? sourceFilePath = null)
     {
-        bool fileMode = sourceFilePath is not null;
+        bool networkMode = sourceFilePath?.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase) == true;
+        bool fileMode = sourceFilePath is not null && !networkMode;
         LiveVbiCaptureStream? input = null;
         try
         {
-            if (fileMode)
+            if (networkMode)
+                input = await TcpVbiCaptureStream.ConnectAsync(sourceFilePath!, new VbiCaptureOptions(
+                    preset.Name, preset.SampleRate, preset.LineLength, preset.LineStart,
+                    preset.LineStartEnd, preset.SampleType == "UInt16", preset.FieldLines,
+                    preset.FieldRangeStart, preset.FieldRangeEnd));
+            else if (fileMode)
                 input = new FileVbiCaptureStream(sourceFilePath!, new VbiCaptureOptions(
                     preset.Name, preset.SampleRate, preset.LineLength, preset.LineStart,
                     preset.LineStartEnd, preset.SampleType == "UInt16", preset.FieldLines,
@@ -5557,7 +5570,7 @@ public partial class MainWindow : Window
                 input.SamplesPerLine,
                 resolvedPreset.LineStart,
                 resolvedPreset.LineStartEnd,
-                IsUInt16: fileMode && preset.SampleType == "UInt16",
+                IsUInt16: (fileMode || networkMode) && preset.SampleType == "UInt16",
                 FieldLines: input.LinesPerFrame,
                 FieldRangeStart: 0,
                 FieldRangeEnd: input.LinesPerFrame,
@@ -5644,7 +5657,7 @@ public partial class MainWindow : Window
             };
             const int videoPreviewWidth = 240;
             const int videoPreviewHeight = 180;
-            bool disableVideoPreview = fileMode || (_sessionState.DisableLiveVbiVideoPreview ?? false);
+            bool disableVideoPreview = fileMode || networkMode || (_sessionState.DisableLiveVbiVideoPreview ?? false);
             var videoPreviewBitmap = new WriteableBitmap(
                 new PixelSize(videoPreviewWidth, videoPreviewHeight),
                 new Vector(96, 96),
@@ -6166,9 +6179,9 @@ public partial class MainWindow : Window
                     },
                 },
             };
-            videoPreviewBorder.IsVisible = !fileMode;
-            videoPreviewInfoText.IsVisible = !fileMode;
-            showVideoPreviewCheckBox.IsVisible = !fileMode;
+            videoPreviewBorder.IsVisible = !fileMode && !networkMode;
+            videoPreviewInfoText.IsVisible = !fileMode && !networkMode;
+            showVideoPreviewCheckBox.IsVisible = !fileMode && !networkMode;
             liveAutoStopNoTeletextPanel.IsVisible = !fileMode;
             if (fileMode)
             {
@@ -6893,7 +6906,9 @@ public partial class MainWindow : Window
                         latestHeaderPage =
                             liveAssembler.LastUpdatedPage ?? latestHeaderPage;
                         TeletextPage? finalized = liveAssembler.LastFinalizedPage;
-                        if (finalized is null) continue;
+                        // Repeated headers and FF filler pages must not replace
+                        // the last received body with an empty preview.
+                        if (finalized is null || !HasPreviewBody(finalized)) continue;
                         if (!pageLocked)
                             latestPage = finalized;
                         else if (validPageLock
@@ -6920,7 +6935,7 @@ public partial class MainWindow : Window
                                 PageNumber = lockedPageNumber,
                             };
                         if (lockedLivePage is not null)
-                            ApplyFileG0SubsetToPage(lockedLivePage, broadcast: true);
+                            ApplyFileG0SubsetToPage(lockedLivePage);
                         BroadcastGrid.Page = CreateWaitingPageDisplay(
                             body, latestHeaderPage,
                             lockedMagazine, lockedPageNumber);
@@ -6929,7 +6944,7 @@ public partial class MainWindow : Window
                         return;
                     }
                     if (latestPage is null) return;
-                    ApplyFileG0SubsetToPage(latestPage, broadcast: true);
+                    ApplyFileG0SubsetToPage(latestPage);
                     BroadcastGrid.Page = latestPage;
                     UpdateFastextToolbars();
                     BroadcastGrid.InvalidateVisual();
@@ -7738,6 +7753,49 @@ public partial class MainWindow : Window
             .ToList();
     }
 
+    private void OnNativeOpenTcpVbiCaptureClicked(object? sender, EventArgs e) =>
+        OnOpenTcpVbiCaptureClicked(sender, new RoutedEventArgs());
+
+    private async void OnOpenTcpVbiCaptureClicked(object? sender, RoutedEventArgs e)
+    {
+        var address = new TextBox { Text = "tcp://127.0.0.1:5556", MinWidth = 390 };
+        var connect = new Button { Content = "Continue", IsDefault = true };
+        var cancel = new Button { Content = "Cancel", IsCancel = true };
+        var dialog = new Window
+        {
+            Title = "Open VBI TCP stream", SizeToContent = SizeToContent.WidthAndHeight,
+            CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(18), Spacing = 12,
+                Children =
+                {
+                    new TextBlock { Text = "VBI-only TBC server (trusted LAN)" }, address,
+                    new TextBlock { Text = "Raw UInt16 LE · 1135 samples · 16 lines per field", Foreground = Brushes.LightGray },
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { cancel, connect } },
+                },
+            },
+        };
+        string? endpoint = null;
+        connect.Click += (_, _) => { endpoint = address.Text?.Trim(); dialog.Close(); };
+        cancel.Click += (_, _) => dialog.Close();
+        await dialog.ShowDialog(this);
+        if (string.IsNullOrWhiteSpace(endpoint)) return;
+        _sessionState.LastCaptureCardPresetName = "VHS-decode VBI-only TBC";
+        var selection = await ShowVbiPresetSelectionAsync();
+        if (selection is null) return;
+        var preset = selection.Value.Preset;
+        if (preset.SampleType != "UInt16" || preset.LineLength != 1135
+            || preset.FieldLines != 16 || preset.FieldRangeStart != 0 || preset.FieldRangeEnd != 16)
+        {
+            await ShowMessageAsync("Open VBI TCP stream", "Select the VHS-decode VBI-only TBC preset.");
+            return;
+        }
+        await StartLiveVbiCaptureAsync(new LiveCaptureInterface(endpoint, endpoint, "TCP"),
+            preset, null, false, _sessionState.KeepEmptyLiveCapturePackets ?? false,
+            null, null, null, null, endpoint);
+    }
+
     private async void OnOpenVbiCaptureClicked(object? sender, RoutedEventArgs e)
     {
         var files = await OpenFilePickerRememberingFolderAsync(new FilePickerOpenOptions
@@ -7871,11 +7929,13 @@ public partial class MainWindow : Window
             {
                 _broadcastPackets.Add(packet);
                 liveAssembler!.Feed(packet, livePacketIndex++);
-                latestPage = liveAssembler.LastFinalizedPage ?? latestPage;
+                if (liveAssembler.LastFinalizedPage is { } finalized
+                    && HasPreviewBody(finalized))
+                    latestPage = finalized;
             }
             if (latestPage is not null)
             {
-                ApplyFileG0SubsetToPage(latestPage, broadcast: true);
+                ApplyFileG0SubsetToPage(latestPage);
                 BroadcastGrid.Page = latestPage;
                 UpdateFastextToolbars();
                 BroadcastGrid.InvalidateVisual();
@@ -7950,6 +8010,7 @@ public partial class MainWindow : Window
             });
         });
         await progressDialog.ShowDialog(this);
+        packetReporter.Enabled = false;
         bool openingPartialCapture = false;
 
         void DiscardPartialPreview()
@@ -8309,6 +8370,10 @@ public partial class MainWindow : Window
             _broadcastStreamIdentity = AnalyzeTeletextStreamIdentity(_broadcastPackets);
             _broadcastFilePath = filePath;
             BroadcastFilePathText.Text = FormatFileFooter(filePath, _store.TotalInstanceCount);
+            // Page-menu actions must target the capture that was just opened.
+            BroadcastGrid.IsActive = true;
+            SquashGrid.IsActive = false;
+            SquashGrid.ClearSelection();
             PopulatePageCombo();
             _broadcastFileOpen = true;
             UpdateNavigationButtons();
@@ -8358,6 +8423,10 @@ public partial class MainWindow : Window
                     enhancementAssembler.Feed(_squashPackets[packetIndex], packetIndex);
                 enhancementAssembler.FinalizeAll();
 
+                // Keep manual Page-menu selections on this newly opened file.
+                SquashGrid.IsActive = true;
+                BroadcastGrid.IsActive = false;
+                BroadcastGrid.ClearSelection();
                 if (_squashStore.TotalInstanceCount == 0)
                     InitializeBlankSquashDocument();
                 else
@@ -8424,6 +8493,10 @@ public partial class MainWindow : Window
 
             _broadcastFilePath = filePath;
             BroadcastFilePathText.Text = FormatFileFooter(filePath, _store.TotalInstanceCount);
+            // Page-menu actions must target the capture that was just opened.
+            BroadcastGrid.IsActive = true;
+            SquashGrid.IsActive = false;
+            SquashGrid.ClearSelection();
             PopulatePageCombo();
             _broadcastFileOpen = true;
             _squashFileOpen = false;
@@ -8445,8 +8518,8 @@ public partial class MainWindow : Window
         StopFlashRoll();
         _decodedBroadcastInstance = null;
         _broadcastReadOnlyExplanationShown = false;
-        _broadcastFileG0Subset = null;
-        _broadcastFileSecondaryG0Subset = null;
+        // Manual G0 choices apply to both views. Opening another capture must
+        // not silently switch its primary or secondary subset back to Auto.
         _broadcastEnhancementsScanned.Clear();
         _broadcastFastextScanned.Clear();
         _suppressComboEvents = true;
@@ -8468,8 +8541,7 @@ public partial class MainWindow : Window
 
     private void ClearSquashPane()
     {
-        _squashFileG0Subset = null;
-        _squashFileSecondaryG0Subset = null;
+        // Keep the editor's manual primary/secondary G0 choices across files.
         _suppressComboEvents = true;
         SquashMagazineComboBox.Items.Clear();
         SquashPageNumberComboBox.Items.Clear();
@@ -9611,6 +9683,26 @@ public partial class MainWindow : Window
         {
             _sessionState = new SessionState();
         }
+
+        if (_sessionState.CapturePresetDefaultsVersion < 1)
+        {
+            // Move saved copies of the old default to the relaxed detection
+            // threshold once, preserving other manually configured values.
+            foreach (CaptureCardPreset preset in _sessionState.CustomCaptureCardPresets ?? [])
+                if (preset.CriFcConfidenceThreshold == 0.35)
+                    preset.CriFcConfidenceThreshold = 0.20;
+            _sessionState.CapturePresetDefaultsVersion = 1;
+        }
+
+        if (_sessionState.CapturePresetDefaultsVersion < 2)
+        {
+            // USB captures need a wider start window to tolerate horizontal jitter.
+            foreach (CaptureCardPreset preset in _sessionState.CustomCaptureCardPresets ?? [])
+                if (string.Equals(preset.Interface, "USB", StringComparison.OrdinalIgnoreCase)
+                    && preset.LineStartEnd < 60 && preset.LineLength >= 60)
+                    preset.LineStartEnd = 60;
+            _sessionState.CapturePresetDefaultsVersion = 2;
+        }
     }
 
     private async Task RestoreSessionFilesAsync()
@@ -10300,7 +10392,7 @@ public partial class MainWindow : Window
             SquashSubpageComboBox.Items.Add(FormatSubpageLabel(subpage));
         SquashSubpageComboBox.SelectedItem = FormatSubpageLabel(address.subpage);
         _squashPage = instances[0].Page;
-        ApplyFileG0SubsetToPage(_squashPage, broadcast: false);
+        ApplyFileG0SubsetToPage(_squashPage);
         SquashGrid.Page = _squashPage;
         UpdateFastextToolbars();
         UpdateEnhancementList(_squashPage);
@@ -11266,7 +11358,7 @@ public partial class MainWindow : Window
 
     private void PrepareBroadcastPageForDisplay(TeletextPage page)
     {
-        ApplyFileG0SubsetToPage(page, broadcast: true);
+        ApplyFileG0SubsetToPage(page);
         EnsureBroadcastFastextLoaded(page);
         if (BroadcastGrid.ShowDiacriticMarkers)
             EnsureBroadcastEnhancementsLoaded(page);
@@ -11394,7 +11486,7 @@ public partial class MainWindow : Window
             _suppressComboEvents = true;
             // No version combo for squash - just use the first instance
             _squashPage = instances[0].Page;
-            ApplyFileG0SubsetToPage(_squashPage, broadcast: false);
+            ApplyFileG0SubsetToPage(_squashPage);
             SquashGrid.Page = _squashPage;
             UpdateFastextToolbars();
             UpdateEnhancementList(_squashPage);

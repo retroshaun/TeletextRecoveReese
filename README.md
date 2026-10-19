@@ -96,6 +96,8 @@ The editor uses one or two synchronized panes:
 - Insert all Level 1 alpha and mosaic colours.
 - Edit mosaic cells with the six Teletext mosaic keys.
 - Choose the G0 national subset for the complete file or leave it on Auto.
+- Manual primary and secondary G0 choices stay selected when another file is
+  opened; changes apply to both the full-broadcast and squashed panes together.
 - Choose a **Secondary G0 subset** for ESC switching, including all 13 Latin national subsets (also Serbian/Croatian/Slovenian,
   often called Yugoslav). Auto
   reads X/28/0 or X/28/4 page designations and M/29/0 or M/29/4 magazine defaults;

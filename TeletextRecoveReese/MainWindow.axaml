@@ -21,6 +21,7 @@
                     <NativeMenuItem Header="Open VBI capture">
                         <NativeMenu>
                             <NativeMenuItem Header="From file…" Click="OnNativeOpenVbiCaptureClicked" />
+                            <NativeMenuItem Header="From TCP stream…" Click="OnNativeOpenTcpVbiCaptureClicked" />
                             <NativeMenuItem Header="Live capture…" Click="OnNativeOpenLiveVbiCaptureClicked" />
                         </NativeMenu>
                     </NativeMenuItem>
@@ -175,6 +176,7 @@
                 <MenuItem Header="Open broadcast stream..." Click="OnOpenClicked" />
                 <MenuItem Header="Open _VBI capture">
                     <MenuItem Header="From _file..." Click="OnOpenVbiCaptureClicked" />
+                    <MenuItem Header="From _TCP stream..." Click="OnOpenTcpVbiCaptureClicked" />
                     <MenuItem x:Name="OpenLiveVbiCaptureMenuItem" Header="_Live capture..." Click="OnOpenLiveVbiCaptureClicked" />
                 </MenuItem>
                 <MenuItem x:Name="OpenRecentMenuItem" Header="Open _recent" />
