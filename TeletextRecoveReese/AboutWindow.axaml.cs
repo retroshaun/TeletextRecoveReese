@@ -74,6 +74,9 @@ public sealed class TerminatorTitleControl : Control
     private const double ContributorsLabelSeconds = 0.36;
     private const double ContributorsValueSeconds = 0.28;
     private const double ContributorsGreenTransitionSeconds = 0.65;
+    private const double ContributorSequenceSeconds = ContributorsValueSeconds
+        + VersionLiftSeconds;
+    private static readonly string[] ContributorNames = ["NIGEL REED", "PAWEŁ \"V-12\" RUCZKO"];
     private const double EasterEggDelaySeconds = 10.0;
     private const double EasterEggTypeSeconds = 0.4;
     private const double SecondsPerTick = 0.016;
@@ -98,7 +101,7 @@ public sealed class TerminatorTitleControl : Control
                                    + VersionCursorBlinkSeconds;
         double contributorsEnd = contributorsStart + VersionLiftSeconds
                                  + ContributorsLabelSeconds + VersionLiftSeconds
-                                 + ContributorsValueSeconds + VersionValueHoldSeconds
+                                 + ContributorNames.Length * ContributorSequenceSeconds
                                  + VersionCursorBlinkSeconds
                                  + ContributorsGreenTransitionSeconds;
         double firstSequenceEnd = Math.Max(titleEnd, Math.Max(versionEnd, contributorsEnd));
@@ -208,7 +211,7 @@ public sealed class TerminatorTitleControl : Control
                                        + VersionCursorBlinkSeconds;
             double contributorsEnd = contributorsStart + VersionLiftSeconds
                                      + ContributorsLabelSeconds + VersionLiftSeconds
-                                     + ContributorsValueSeconds + VersionValueHoldSeconds
+                                     + ContributorNames.Length * ContributorSequenceSeconds
                                      + VersionCursorBlinkSeconds
                                      + ContributorsGreenTransitionSeconds;
             double easterEggStart = Math.Max(titleEnd, Math.Max(versionEnd, contributorsEnd))
@@ -319,7 +322,6 @@ public sealed class TerminatorTitleControl : Control
         FormattedText valueText = CreateText(visibleValue, terminalTypeface, TerminalFontSize);
 
         const string contributorsLabel = "CONTRIBUTORS:";
-        const string contributorName = "NIGEL REED";
         double contributorsElapsed = elapsed - contributorsStart;
         bool contributorsActive = contributorsElapsed >= 0;
         double contributorsLayoutProgress = Math.Clamp(
@@ -335,22 +337,15 @@ public sealed class TerminatorTitleControl : Control
         double contributorNameElapsed = contributorsLabelElapsed
                                         - ContributorsLabelSeconds
                                         - VersionLiftSeconds;
-        int contributorNameCharacters = Math.Min(
-            contributorName.Length,
-            (int)Math.Ceiling(
-                Math.Clamp(contributorNameElapsed / ContributorsValueSeconds, 0, 1)
-                * contributorName.Length));
+        int activeContributor = Math.Clamp(
+            (int)Math.Floor(Math.Max(0, contributorNameElapsed) / ContributorSequenceSeconds),
+            0, ContributorNames.Length - 1);
         FormattedText contributorsLabelText = CreateText(
             contributorsLabel[..contributorsLabelCharacters],
             terminalTypeface,
             TerminalFontSize);
-        FormattedText contributorNameText = CreateText(
-            contributorName[..contributorNameCharacters],
-            terminalTypeface,
-            TerminalFontSize);
         double contributorsBlinkElapsed = contributorNameElapsed
-                                           - ContributorsValueSeconds
-                                           - VersionValueHoldSeconds;
+                                           - ContributorNames.Length * ContributorSequenceSeconds;
         bool contributorsBlinkFinished =
             contributorsBlinkElapsed >= VersionCursorBlinkSeconds;
         bool contributorsCursorVisible = contributorsActive
@@ -399,7 +394,7 @@ public sealed class TerminatorTitleControl : Control
         double bottomY = Math.Max(0, Bounds.Height - Math.Max(labelText.Height, valueText.Height) - 16);
         double lineStep = Math.Max(labelText.Height, 20) + 3;
         double upperY = bottomY - lineStep;
-        double contributorsLift = EaseInOut(contributorsLayoutProgress) * lineStep * 3;
+        double contributorsLift = EaseInOut(contributorsLayoutProgress) * lineStep * (ContributorNames.Length + 2);
         double easterEggLift = EaseInOut(easterEggLiftProgress) * lineStep * 2;
         double extraLift = contributorsLift + easterEggLift;
         double labelY = Lerp(bottomY, upperY, EaseInOut(liftProgress)) - extraLift;
@@ -420,20 +415,27 @@ public sealed class TerminatorTitleControl : Control
             }
         }
 
-        double contributorsLabelY = upperY - easterEggLift;
-        double contributorNameY = bottomY - easterEggLift;
+        double contributorsLabelY = upperY - (ContributorNames.Length - 1) * lineStep - easterEggLift;
+        double contributorNameY = bottomY - (ContributorNames.Length - 1) * lineStep - easterEggLift;
         if (contributorsLabelElapsed >= 0)
             DrawTerminalText(
                 context,
                 contributorsLabelText,
                 new Point(textX, contributorsLabelY),
                 contributorsBrush);
-        if (contributorNameElapsed >= 0)
+        for (int line = 0; line < ContributorNames.Length; line++)
+        {
+            double lineElapsed = contributorNameElapsed - line * ContributorSequenceSeconds;
+            if (lineElapsed < 0) break;
+            string name = ContributorNames[line];
+            int characters = Math.Min(name.Length, (int)Math.Ceiling(
+                Math.Clamp(lineElapsed / ContributorsValueSeconds, 0, 1) * name.Length));
             DrawTerminalText(
                 context,
-                contributorNameText,
-                new Point(textX, contributorNameY),
+                CreateText(name[..characters], terminalTypeface, TerminalFontSize),
+                new Point(textX, contributorNameY + line * lineStep),
                 contributorsBrush);
+        }
 
         if (easterEggTypeElapsed >= 0)
         {
@@ -452,10 +454,10 @@ public sealed class TerminatorTitleControl : Control
                 : cursorVisible;
         if (showCursor)
         {
-            double cursorY = contributorsActive
-                             && !easterEggActive
-                             && contributorNameElapsed < 0
-                ? upperY
+            double cursorY = contributorsActive && !easterEggActive
+                ? contributorNameElapsed < 0
+                    ? contributorsLabelY
+                    : contributorNameY + activeContributor * lineStep
                 : bottomY;
             var cursorRect = new Rect(cursorX, cursorY + 2, 10, Math.Max(14, labelText.Height - 3));
             context.DrawRectangle(
