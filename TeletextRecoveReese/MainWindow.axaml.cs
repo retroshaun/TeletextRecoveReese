@@ -697,6 +697,7 @@ public partial class MainWindow : Window
     private DateOnly? _lastLiveCaptureDate;
     private int _lastAddedCombinedPage = 0x100;
     private int _lastAddedSubpage;
+    private readonly Dictionary<int, int> _lastCopySubpages = new();
 
     private static readonly DataFormat<byte[]> TeletextClipboardFormat =
         DataFormat.CreateBytesApplicationFormat("com.teletextrecovereese.raw-byte-block.v2");
@@ -10734,9 +10735,23 @@ public partial class MainWindow : Window
         return copyPage;
     }
 
+    private async void OnCopyToSquashClicked(object? sender, RoutedEventArgs e)
+    {
+        if (!TryGetBroadcastAddress(out var source) || BroadcastGrid.Page is not { } sourcePage) return;
+        int versionIndex = _store.GetInstances(source.magazine, source.page, source.subpage)
+            .ToList().FindIndex(instance => ReferenceEquals(instance.Page, sourcePage));
+        if (versionIndex < 0) return;
+        var target = await ShowNewPageDialogAsync(source);
+        if (target is not { } address) return;
+        if (_squashStore.GetInstances(address.magazine, address.page, address.subpage).Count > 0
+            && !await ConfirmDeletePageAsync(address, overwrite: true)) return;
+        CopyBroadcastPageToSquash(source, versionIndex, address);
+    }
+
     private void CopyBroadcastPageToSquash(
         (int magazine, int page, int subpage) address,
-        int versionIndex)
+        int versionIndex,
+        (int magazine, int page, int subpage)? destination = null)
     {
         var instances = _store.GetInstances(address.magazine, address.page, address.subpage);
         if (versionIndex < 0 || versionIndex >= instances.Count) return;
@@ -10744,6 +10759,15 @@ public partial class MainWindow : Window
         TeletextPage sourcePage = GetBroadcastPage(instances[versionIndex]);
         EnsureBroadcastFastextLoaded(sourcePage);
         EnsureBroadcastEnhancementsLoaded(sourcePage);
+
+        address = destination ?? address;
+        byte[] CopyPacket(byte[] packet)
+        {
+            var copy = (byte[])packet.Clone();
+            int first = Hamming.Decode84(copy[0]).Value;
+            copy[0] = Hamming.Encode84((first & 8) | (address.magazine & 7));
+            return copy;
+        }
 
         var copiedPage = new TeletextPage
         {
@@ -10754,18 +10778,45 @@ public partial class MainWindow : Window
         for (int row = 0; row < copiedPage.RawRows.Length; row++)
         {
             if (sourcePage.RawRows[row] is { } raw)
-                PageAssembler.ApplyRow(copiedPage, row, (byte[])raw.Clone());
+            {
+                var packet = CopyPacket(raw);
+                if (row == 0)
+                {
+                    packet[2] = Hamming.Encode84(address.page & 15);
+                    packet[3] = Hamming.Encode84(address.page >> 4);
+                    PageStore.RewriteSubpageHeader(packet, address.subpage);
+                }
+                PageAssembler.ApplyRow(copiedPage, row, packet);
+            }
         }
 
         foreach (var packet in sourcePage.EffectiveCharacterSetPackets)
-            PageAssembler.ApplyCharacterSetPacket(copiedPage, packet.RawPacket);
+            PageAssembler.ApplyCharacterSetPacket(copiedPage, CopyPacket(packet.RawPacket));
 
         PageAssembler.ReplaceEnhancementPackets(
             copiedPage,
             sourcePage.EnhancementPackets.Select(packet =>
-                ((byte[])packet.RawPacket.Clone(), -1)));
+                (CopyPacket(packet.RawPacket), -1)));
         if (sourcePage.FastextPacket is { } fastext)
-            PageAssembler.ApplyFastextPacket(copiedPage, (byte[])fastext.Clone());
+        {
+            var packet = CopyPacket(fastext);
+            // Fastext magazine addresses are relative to the containing page.
+            int magazineDelta = (sourcePage.Magazine & 7) ^ (address.magazine & 7);
+            for (int link = 0; link < 6 && magazineDelta != 0; link++)
+            {
+                int offset = 3 + link * 6;
+                packet[offset + 3] = Hamming.Encode84(Hamming.Decode84(packet[offset + 3]).Value ^ ((magazineDelta & 1) << 3));
+                packet[offset + 5] = Hamming.Encode84(Hamming.Decode84(packet[offset + 5]).Value ^ ((magazineDelta & 6) << 1));
+            }
+            PageAssembler.ApplyFastextPacket(copiedPage, packet);
+        }
+
+        if (destination is not null)
+            foreach (var removed in _squashStore.RemoveAddress(address.magazine, address.page, address.subpage))
+            {
+                MarkSourcePacketsDeleted(removed.Page);
+                _pageHistories.Remove(removed.Page);
+            }
 
         _squashStore.AddInstance(new PageInstance
         {
@@ -11080,6 +11131,7 @@ public partial class MainWindow : Window
 
     private void UpdateBroadcastVersionButtons()
     {
+        CopyToSquashButton.IsEnabled = BroadcastGrid.Page is not null;
         if (BroadcastVersionButtonsGrid is null) return;
 
         // Keep the current button range stable while it is being used. Rebuilding
@@ -12051,7 +12103,8 @@ public partial class MainWindow : Window
         return page;
     }
 
-    private async Task<(int magazine, int page, int subpage)?> ShowNewPageDialogAsync()
+    private async Task<(int magazine, int page, int subpage)?> ShowNewPageDialogAsync(
+        (int magazine, int page, int subpage)? copySource = null)
     {
         var pageInput = new NumericUpDown
         {
@@ -12069,15 +12122,18 @@ public partial class MainWindow : Window
             Width = 130,
             TextConverter = new HexNumericConverter(4, packedSubpage: true),
         };
-        pageInput.Value = _lastAddedCombinedPage;
-        subpageInput.Value = UnpackSubpage(_lastAddedSubpage);
-        var okButton = new Button { Content = "Add", Width = 90 };
+        pageInput.Value = copySource is { } source ? (source.magazine << 8) | source.page : _lastAddedCombinedPage;
+        int initialPage = decimal.ToInt32(pageInput.Value ?? _lastAddedCombinedPage);
+        subpageInput.Value = UnpackSubpage(copySource is not null
+            && _lastCopySubpages.TryGetValue(initialPage, out int rememberedSubpage)
+                ? rememberedSubpage : copySource?.subpage ?? _lastAddedSubpage);
+        var okButton = new Button { Content = copySource is null ? "Add" : "OK", Width = 90 };
         var cancelButton = new Button { Content = "Cancel", Width = 90 };
         (int magazine, int page, int subpage)? result = null;
 
         var dialog = new Window
         {
-            Title = "New teletext page",
+            Title = copySource is null ? "New teletext page" : "Copy to squash",
             Width = 390,
             SizeToContent = SizeToContent.Height,
             CanResize = false,
@@ -12125,7 +12181,9 @@ public partial class MainWindow : Window
                     return;
 
                 displayedCombinedPage = combinedPage;
-                subpageInput.Value = 0;
+                subpageInput.Value = copySource is not null
+                    && _lastCopySubpages.TryGetValue(combinedPage, out int remembered)
+                        ? UnpackSubpage(remembered) : 0;
             };
         };
         Grid.SetColumn(pageInput, 1);
@@ -12136,6 +12194,8 @@ public partial class MainWindow : Window
             int combined = decimal.ToInt32(pageInput.Value ?? 0x100);
             result = ((combined >> 8) & 0x0F, combined & 0xFF,
                 HexNumericConverter.PackSubpage(subpageInput.Value ?? 0));
+            if (copySource is not null)
+                _lastCopySubpages[combined] = result.Value.subpage;
             dialog.Close();
         };
         cancelButton.Click += (_, _) => dialog.Close();
@@ -12153,7 +12213,7 @@ public partial class MainWindow : Window
             $"Page {address.magazine}{address.page:X2}, subpage {address.subpage:X4}, already exists.");
     }
 
-    private async Task<bool> ConfirmDeletePageAsync((int magazine, int page, int subpage) address)
+    private async Task<bool> ConfirmDeletePageAsync((int magazine, int page, int subpage) address, bool overwrite = false)
     {
         bool confirmed = false;
         var yesButton = new Button
@@ -12166,7 +12226,7 @@ public partial class MainWindow : Window
         var noButton = new Button { Content = "No", Width = 90 };
         var dialog = new Window
         {
-            Title = "Delete teletext page",
+            Title = overwrite ? "Overwrite teletext page" : "Delete teletext page",
             Width = 430,
             SizeToContent = SizeToContent.Height,
             CanResize = false,
@@ -12179,7 +12239,9 @@ public partial class MainWindow : Window
                 {
                     new TextBlock
                     {
-                        Text = $"Permanently delete page {address.magazine}{address.page:X2}, subpage {address.subpage:X4}?",
+                        Text = overwrite
+                            ? $"Page {address.magazine}{address.page:X2}, subpage {address.subpage:X4}, already exists. Overwrite it with this new copy?"
+                            : $"Permanently delete page {address.magazine}{address.page:X2}, subpage {address.subpage:X4}?",
                         TextWrapping = global::Avalonia.Media.TextWrapping.Wrap,
                     },
                     new StackPanel

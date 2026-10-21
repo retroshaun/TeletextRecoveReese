@@ -721,6 +721,7 @@
                             </Grid>
                         </Border>
                         <Border x:Name="BroadcastDisplayToolbar" Background="{DynamicResource ToolbarBackgroundBrush}" BorderBrush="{DynamicResource PanelBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="4,3" MinHeight="34">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <Button x:Name="BroadcastControlCodesButton" Content="Codes: off" Width="88" Height="28" Padding="6,0" FontSize="13" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnBroadcastControlCodesClicked"/>
                                 <Button x:Name="BroadcastDiacriticsButton" Content="Diacritics: off" Width="112" Height="28" Padding="6,0" FontSize="13" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnBroadcastDiacriticsClicked"/>
@@ -737,6 +738,8 @@
                                         ToolTip.Tip="Rapidly cycle all versions of the current page"
                                         Click="OnBroadcastFlashRollClicked"/>
                             </StackPanel>
+                                <Button x:Name="CopyToSquashButton" Content="Copy to squash" Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Height="26" Padding="8,0" FontSize="13" IsEnabled="False" ToolTip.Tip="Copy the full current broadcast page to a specified squash page and subpage" Click="OnCopyToSquashClicked"/>
+                            </Grid>
                         </Border>
                     </StackPanel>
 
