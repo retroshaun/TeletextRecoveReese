@@ -379,6 +379,8 @@ public partial class MainWindow : Window
     {
         public string? BroadcastFilePath { get; set; }
         public string? SquashFilePath { get; set; }
+        public SessionPagePreview? SquashPreview { get; set; }
+        public SessionPagePreview? BroadcastPreview { get; set; }
         public int? BroadcastMagazine { get; set; }
         public int? BroadcastPage { get; set; }
         public int? BroadcastSubpage { get; set; }
@@ -648,6 +650,8 @@ public partial class MainWindow : Window
     private NativeMenuItem? _nativeApplySquashedRepairsMenuItem;
     private NativeMenuItem? _nativePreviousPageMenuItem;
     private NativeMenuItem? _nativeNextPageMenuItem;
+    private NativeMenuItem? _nativeSwapSubpagesMenuItem;
+    private NativeMenuItem? _nativeManageSquashedPagesMenuItem;
     private NativeMenuItem? _nativeSelectBroadcastSampleRangeMenuItem;
     private NativeMenuItem? _nativeBroadcastServiceDataMenuItem;
     private NativeMenuItem? _nativeOpenLiveVbiCaptureMenuItem;
@@ -855,18 +859,79 @@ public partial class MainWindow : Window
         var startNewButton = new Button
         {
             Content = "Start new session",
-            MinWidth = 130,
+            MinWidth = 150,
             IsCancel = true,
         };
         var restoreButton = new Button
         {
-            Content = "Open previous session",
-            MinWidth = 150,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(14),
         };
+        var sessionDetails = new StackPanel { Spacing = 14 };
+        var previewBitmaps = new List<Bitmap>();
+        void AddSessionFile(string label, string? path, int? magazine, int? page, int? subpage,
+            int? version = null, bool broadcast = false)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            string position = magazine is >= 1 and <= 8 && page is >= 0 and <= 255
+                ? $"Page {magazine}{page:X2}"
+                : "Page position unavailable";
+            if (subpage is not null) position += $" · subpage {subpage:X4}";
+            if (version is not null) position += $" · version v{version}";
+            var filename = new TextBlock
+            {
+                Text = Path.GetFileName(path),
+                TextWrapping = global::Avalonia.Media.TextWrapping.Wrap,
+            };
+            ToolTip.SetTip(filename, path);
+            var details = new StackPanel
+            {
+                Spacing = 3,
+                Children =
+                {
+                    new TextBlock { Text = label, FontWeight = FontWeight.SemiBold },
+                    filename,
+                    new TextBlock { Text = position, Foreground = Brushes.LightGray,
+                        TextWrapping = global::Avalonia.Media.TextWrapping.Wrap },
+                },
+            };
+            Bitmap? preview = LoadSessionPagePreview(broadcast, path, magazine, page, subpage, version);
+            if (preview is null)
+                sessionDetails.Children.Add(details);
+            else
+            {
+                previewBitmaps.Add(preview);
+                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("150,*"), ColumnSpacing = 12 };
+                row.Children.Add(new Image
+                {
+                    Source = preview, Width = 144, Height = 135,
+                    Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Top,
+                });
+                Grid.SetColumn(details, 1);
+                row.Children.Add(details);
+                sessionDetails.Children.Add(row);
+            }
+        }
+        AddSessionFile("Squashed", _sessionState.SquashFilePath,
+            _sessionState.SquashMagazine, _sessionState.SquashPage, _sessionState.SquashSubpage);
+        AddSessionFile("Full broadcast", _sessionState.BroadcastFilePath,
+            _sessionState.BroadcastMagazine, _sessionState.BroadcastPage, _sessionState.BroadcastSubpage,
+            _sessionState.BroadcastVersion, broadcast: true);
+        restoreButton.Content = new StackPanel
+        {
+            Spacing = 14,
+            Children =
+            {
+                new TextBlock { Text = "Previous session", FontWeight = FontWeight.SemiBold, FontSize = 16 },
+                sessionDetails,
+            },
+        };
+        ToolTip.SetTip(restoreButton, "Open previous session");
         var dialog = new Window
         {
             Title = "Previous session found",
-            Width = 450,
+            Width = 600,
             SizeToContent = SizeToContent.Height,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -878,7 +943,7 @@ public partial class MainWindow : Window
                 {
                     new TextBlock
                     {
-                        Text = "Do you want to open the previous session?",
+                        Text = "Choose a session",
                         TextWrapping = global::Avalonia.Media.TextWrapping.Wrap,
                     },
                     new StackPanel
@@ -886,8 +951,9 @@ public partial class MainWindow : Window
                         Orientation = Orientation.Horizontal,
                         HorizontalAlignment = HorizontalAlignment.Right,
                         Spacing = 8,
-                        Children = { startNewButton, restoreButton },
-                    }
+                        Children = { startNewButton },
+                    },
+                    restoreButton,
                 }
             }
         };
@@ -897,7 +963,8 @@ public partial class MainWindow : Window
             dialog.Close();
         };
         startNewButton.Click += (_, _) => dialog.Close();
-        await dialog.ShowDialog(this);
+        try { await dialog.ShowDialog(this); }
+        finally { foreach (Bitmap preview in previewBitmaps) preview.Dispose(); }
         return restore;
     }
 
@@ -1995,12 +2062,13 @@ public partial class MainWindow : Window
 
     private async void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
-        CaptureSessionSelection();
-        SaveSessionState();
-        if (_closeConfirmed) return;
-
         bool hasUnsavedCapturedStream = HasUnsavedCapturedStream();
-        if (!hasUnsavedCapturedStream && !_squashDirty) return;
+        if (_closeConfirmed || (!hasUnsavedCapturedStream && !_squashDirty))
+        {
+            CaptureSessionSelection();
+            SaveSessionState();
+            return;
+        }
 
         e.Cancel = true;
         if (_closeDialogOpen) return;
@@ -4371,6 +4439,10 @@ public partial class MainWindow : Window
         _nativeBroadcastServiceDataMenuItem = pageMenu?.Items
             .OfType<NativeMenuItem>()
             .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Broadcast service data…", StringComparison.Ordinal));
+        _nativeSwapSubpagesMenuItem = pageMenu?.Items.OfType<NativeMenuItem>()
+            .FirstOrDefault(item => item.Header?.ToString() == "Swap subpages...");
+        _nativeManageSquashedPagesMenuItem = pageMenu?.Items.OfType<NativeMenuItem>()
+            .FirstOrDefault(item => item.Header?.ToString() == "Manage squashed pages…");
         _nativePreviousPageMenuItem = pageMenu?.Items
             .OfType<NativeMenuItem>()
             .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Previous page", StringComparison.Ordinal));
@@ -9765,12 +9837,6 @@ public partial class MainWindow : Window
             CaptureRecentFilePosition(entry);
     }
 
-    private void PersistRecentFilePositions()
-    {
-        CaptureRecentFilePositions();
-        SaveSessionState();
-    }
-
     private void CaptureRecentFilePosition(RecentFileEntry entry)
     {
         if (entry.BroadcastPane
@@ -9897,6 +9963,7 @@ public partial class MainWindow : Window
             _sessionState.BroadcastSubpage = broadcastAddress.subpage;
             _sessionState.BroadcastVersion = Math.Max(VersionComboBox.SelectedIndex, 0);
         }
+        SaveSessionPagePreviews();
     }
 
     private void SaveSessionState()
@@ -10302,7 +10369,7 @@ public partial class MainWindow : Window
         UpdateNavigationButtons();
         UpdateVideoBookmarkUi();
         if (persistRecentPosition)
-            PersistRecentFilePositions();
+            CaptureRecentFilePositions();
         LinkNavigationFromBroadcast(address);
     }
 
@@ -10330,7 +10397,7 @@ public partial class MainWindow : Window
         UpdateNavigationButtons();
         UpdateUndoToolbar();
         UpdateVideoBookmarkUi();
-        PersistRecentFilePositions();
+        CaptureRecentFilePositions();
         LinkNavigationFromSquash(address);
     }
 
@@ -10885,6 +10952,11 @@ public partial class MainWindow : Window
         SquashHeaderNextButton.IsEnabled = SquashNextButton.IsEnabled;
         UpdateNavigationMenuAvailability();
         SquashDeletePageButton.IsEnabled = squashIndex >= 0;
+        bool canSwapSubpages = _squashFileOpen && squashIndex >= 0
+            && _squashStore.GetKnownSubpages(squashAddress.magazine, squashAddress.page).Take(2).Count() == 2;
+        SwapSubpagesMenuItem.IsEnabled = canSwapSubpages;
+        if (_nativeSwapSubpagesMenuItem is not null)
+            _nativeSwapSubpagesMenuItem.IsEnabled = canSwapSubpages;
         UpdateRestorationProgress(squashAddresses.Count, squashIndex);
 
         SquashJumpToBroadcastButton.IsEnabled = _broadcastFileOpen;
@@ -10902,6 +10974,10 @@ public partial class MainWindow : Window
 
     private void UpdateNavigationMenuAvailability()
     {
+        bool canManageSquashedPages = CanManageSquashedPages();
+        ManageSquashedPagesMenuItem.IsEnabled = canManageSquashedPages;
+        if (_nativeManageSquashedPagesMenuItem is not null)
+            _nativeManageSquashedPagesMenuItem.IsEnabled = canManageSquashedPages;
         bool broadcastActive = IsActiveGrid() == BroadcastGrid;
         bool canNavigatePrevious = broadcastActive
             ? BroadcastPreviousButton.IsEnabled
@@ -11116,7 +11192,7 @@ public partial class MainWindow : Window
         UpdateBroadcastVersionButtons();
         UpdateNavigationButtons();
         UpdateVideoBookmarkUi();
-        PersistRecentFilePositions();
+        CaptureRecentFilePositions();
         LinkNavigationFromBroadcast((magazine, page, subpage));
     }
 
@@ -11476,7 +11552,7 @@ public partial class MainWindow : Window
         UpdateNavigationButtons();
         UpdateUndoToolbar();
         UpdateVideoBookmarkUi();
-        PersistRecentFilePositions();
+        CaptureRecentFilePositions();
         LinkNavigationFromSquash((magazine, page, subpage));
     }
 
@@ -13554,6 +13630,7 @@ public partial class MainWindow : Window
                 for (int row = 0; row < 25; row++)
                     newPagePackets.Add((byte[])(page.RawRows[row]
                         ?? CreateBlankPacket(page, row)).Clone());
+                if (page.RawRows[25] is { } crc) newPagePackets.Add((byte[])crc.Clone());
                 foreach (var enhancement in page.EnhancementPackets.OrderBy(packet => packet.DesignationCode))
                     newPagePackets.Add((byte[])enhancement.RawPacket.Clone());
                 foreach (var charset in page.EffectiveCharacterSetPackets)
@@ -13570,6 +13647,7 @@ public partial class MainWindow : Window
             pages.Add(_squashPage);
 
         var insertAfter = new Dictionary<int, List<byte[]>>();
+        var appendedPages = new List<byte[]>();
 
         foreach (var page in pages)
         {
@@ -13585,12 +13663,11 @@ public partial class MainWindow : Window
             // append it as a complete page, beginning with its header.
             if (anchor < 0)
             {
-                anchor = output.Count - 1;
-                if (!insertAfter.TryGetValue(anchor, out var completePage))
-                    insertAfter[anchor] = completePage = new List<byte[]>();
+                var completePage = appendedPages;
                 for (int row = 0; row < 25; row++)
                     completePage.Add((byte[])(page.RawRows[row]
                         ?? CreateBlankPacket(page, row)).Clone());
+                if (page.RawRows[25] is { } crc) completePage.Add((byte[])crc.Clone());
                 foreach (var enhancement in page.EnhancementPackets.OrderBy(packet => packet.DesignationCode))
                     completePage.Add((byte[])enhancement.RawPacket.Clone());
                 foreach (var charset in page.EffectiveCharacterSetPackets)
@@ -13660,7 +13737,10 @@ public partial class MainWindow : Window
         }
 
         if (insertAfter.Count == 0 && _deletedSquashPacketIndices.Count == 0)
+        {
+            output.AddRange(appendedPages);
             return RemovePaddingPackets(output);
+        }
 
         var expanded = new List<byte[]>(output.Count + insertAfter.Values.Sum(rows => rows.Count));
         for (int index = 0; index < output.Count; index++)
@@ -13671,6 +13751,7 @@ public partial class MainWindow : Window
                 && insertAfter.TryGetValue(index, out var additions))
                 expanded.AddRange(additions);
         }
+        expanded.AddRange(appendedPages);
         return RemovePaddingPackets(expanded);
     }
 

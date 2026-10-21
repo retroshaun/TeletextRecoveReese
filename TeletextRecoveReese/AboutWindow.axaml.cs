@@ -76,7 +76,9 @@ public sealed class TerminatorTitleControl : Control
     private const double ContributorsGreenTransitionSeconds = 0.65;
     private const double ContributorSequenceSeconds = ContributorsValueSeconds
         + VersionLiftSeconds;
-    private static readonly string[] ContributorNames = ["NIGEL REED", "PAWEŁ \"V-12\" RUCZKO"];
+    private static readonly string[] ContributorNames = ["NIGEL REED", "PAWEŁ \"V-12\" RUCZKO", "MARCARCHIWUM"];
+    private static double ContributorsTypingSeconds =>
+        (ContributorNames.Length - 1) * ContributorSequenceSeconds + ContributorsValueSeconds;
     private const double EasterEggDelaySeconds = 10.0;
     private const double EasterEggTypeSeconds = 0.4;
     private const double SecondsPerTick = 0.016;
@@ -101,7 +103,7 @@ public sealed class TerminatorTitleControl : Control
                                    + VersionCursorBlinkSeconds;
         double contributorsEnd = contributorsStart + VersionLiftSeconds
                                  + ContributorsLabelSeconds + VersionLiftSeconds
-                                 + ContributorNames.Length * ContributorSequenceSeconds
+                                 + ContributorsTypingSeconds + VersionValueHoldSeconds
                                  + VersionCursorBlinkSeconds
                                  + ContributorsGreenTransitionSeconds;
         double firstSequenceEnd = Math.Max(titleEnd, Math.Max(versionEnd, contributorsEnd));
@@ -211,7 +213,7 @@ public sealed class TerminatorTitleControl : Control
                                        + VersionCursorBlinkSeconds;
             double contributorsEnd = contributorsStart + VersionLiftSeconds
                                      + ContributorsLabelSeconds + VersionLiftSeconds
-                                     + ContributorNames.Length * ContributorSequenceSeconds
+                                     + ContributorsTypingSeconds + VersionValueHoldSeconds
                                      + VersionCursorBlinkSeconds
                                      + ContributorsGreenTransitionSeconds;
             double easterEggStart = Math.Max(titleEnd, Math.Max(versionEnd, contributorsEnd))
@@ -345,7 +347,7 @@ public sealed class TerminatorTitleControl : Control
             terminalTypeface,
             TerminalFontSize);
         double contributorsBlinkElapsed = contributorNameElapsed
-                                           - ContributorNames.Length * ContributorSequenceSeconds;
+                                           - ContributorsTypingSeconds - VersionValueHoldSeconds;
         bool contributorsBlinkFinished =
             contributorsBlinkElapsed >= VersionCursorBlinkSeconds;
         bool contributorsCursorVisible = contributorsActive
