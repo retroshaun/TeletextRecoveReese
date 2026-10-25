@@ -438,38 +438,118 @@ public static class VbiDeconvolutionEngine
             : searchOffsetSamples;
         int shiftedStart = options.LineStart + effectiveSearchOffset;
         int shiftedEnd = options.LineStartEnd + effectiveSearchOffset;
-        if ((allowClippedClockRunIn || shiftedStart < 0)
+        int clippedStart = 0;
+        float clippedLow = 0, clippedHigh = 0;
+        double clippedConfidence = double.MinValue;
+        bool clippedFirst = allowClippedClockRunIn || shiftedStart < 0;
+        // A search window that opens at the first captured sample cannot see a
+        // run-in that started before the line. Later lines on some cards (e.g.
+        // CX23885) drift there, so weigh a clipped lock against the ordinary one.
+        bool clippedCompared = !clippedFirst && shiftedStart == 0
+            && !UseLegacyFixedDetectionForTest;
+        bool clippedFound = (clippedFirst || clippedCompared)
             && TryFindClippedClockRunIn(
                 resampled, plan.Length, options,
-                out int clippedStart,
-                out float clippedLow,
-                out float clippedHigh))
+                out clippedStart,
+                out clippedLow,
+                out clippedHigh,
+                out clippedConfidence);
+        if (clippedFirst && clippedFound)
         {
-            if (detectStartOnly)
-            {
-                detectedStartSample = (int)Math.Round(
-                    clippedStart * bitWidth / 8.0);
-                return new PreparedLine(Array.Empty<float>(), null);
-            }
-            clippedStart += options.ExtraRoll;
-            PreparedLine? clipped = BuildPreparedLine(
-                resampled, plan.Length, clippedStart, bitWidth,
-                manualPacketSpanSamples, clippedLow, clippedHigh,
-                out detectedEndSample);
-            if (clipped is not null)
-            {
-                detectedStartSample = (int)Math.Round(
-                    clippedStart * bitWidth / 8.0);
-                return clipped;
-            }
+            PreparedLine? clipped = UseClippedClockRunIn(
+                resampled, plan.Length, options, bitWidth, manualPacketSpanSamples, detectStartOnly,
+                clippedStart, clippedLow, clippedHigh,
+                out detectedStartSample, out detectedEndSample);
+            if (clipped is not null) return clipped;
         }
+        bool locked = TryLockClockRunIn(
+            resampled, plan.Length, options, shiftedStart, shiftedEnd, bitWidth,
+            out int bestStart, out double criFcConfidence);
+        if (clippedCompared && clippedFound
+            && (!locked || clippedConfidence > criFcConfidence))
+        {
+            PreparedLine? clipped = UseClippedClockRunIn(
+                resampled, plan.Length, options, bitWidth, manualPacketSpanSamples, detectStartOnly,
+                clippedStart, clippedLow, clippedHigh,
+                out detectedStartSample, out detectedEndSample);
+            if (clipped is not null) return clipped;
+        }
+        if (!locked) return null;
+
+        if (detectStartOnly)
+        {
+            detectedStartSample = (int)Math.Round(bestStart * bitWidth / 8.0);
+            return new PreparedLine(Array.Empty<float>(), null);
+        }
+
+        // Apply the manual phase correction only after locking and validation.
+        // Keep automatic clock-search detection independent of this correction.
+        bestStart += options.ExtraRoll;
+        PreparedLine? preparedLine = BuildPreparedLine(
+            resampled, plan.Length, bestStart, bitWidth,
+            manualPacketSpanSamples, null, null,
+            out detectedEndSample);
+        if (preparedLine is null) return null;
+        detectedStartSample = (int)Math.Round(bestStart * bitWidth / 8.0);
+        return preparedLine;
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(resampled);
+        }
+    }
+
+    private static PreparedLine? UseClippedClockRunIn(
+        float[] resampled,
+        int sampleCount,
+        VbiCaptureOptions options,
+        double bitWidth,
+        double manualPacketSpanSamples,
+        bool detectStartOnly,
+        int clippedStart,
+        float clippedLow,
+        float clippedHigh,
+        out int detectedStartSample,
+        out int detectedEndSample)
+    {
+        detectedStartSample = -1;
+        detectedEndSample = -1;
+        if (detectStartOnly)
+        {
+            detectedStartSample = (int)Math.Round(
+                clippedStart * bitWidth / 8.0);
+            return new PreparedLine(Array.Empty<float>(), null);
+        }
+        clippedStart += options.ExtraRoll;
+        PreparedLine? clipped = BuildPreparedLine(
+            resampled, sampleCount, clippedStart, bitWidth,
+            manualPacketSpanSamples, clippedLow, clippedHigh,
+            out detectedEndSample);
+        if (clipped is null) return null;
+        detectedStartSample = (int)Math.Round(
+            clippedStart * bitWidth / 8.0);
+        return clipped;
+    }
+
+    private static bool TryLockClockRunIn(
+        float[] resampled,
+        int sampleCount,
+        VbiCaptureOptions options,
+        int shiftedStart,
+        int shiftedEnd,
+        double bitWidth,
+        out int bestStart,
+        out double criFcConfidence)
+    {
+        bestStart = -1;
+        criFcConfidence = double.MinValue;
         int searchStart = Math.Max(0, (int)Math.Floor(shiftedStart * 8 / bitWidth));
-        int searchEnd = Math.Min(plan.Length - 24 * 8 - 1, (int)Math.Ceiling(shiftedEnd * 8 / bitWidth));
-        if (searchEnd <= searchStart) return null;
+        int searchEnd = Math.Min(sampleCount - 24 * 8 - 1, (int)Math.Ceiling(shiftedEnd * 8 / bitWidth));
+        if (searchEnd <= searchStart) return false;
 
         if (!UseLegacyFixedDetectionForTest)
         {
-            int varianceEnd = Math.Min(plan.Length, searchEnd + DecoderInputBits * 8);
+            int varianceEnd = Math.Min(sampleCount, searchEnd + DecoderInputBits * 8);
             double sampleSum = 0;
             double squareSum = 0;
             int varianceCount = varianceEnd - searchStart;
@@ -483,7 +563,7 @@ public static class VbiDeconvolutionEngine
             double standardDeviation = Math.Sqrt(Math.Max(
                 0, squareSum / Math.Max(varianceCount, 1) - mean * mean));
             if (standardDeviation < options.StandardDeviationThreshold)
-                return null;
+                return false;
         }
 
         ReadOnlySpan<byte> reference = VbiPatternResources.ObservedCriFc;
@@ -500,7 +580,7 @@ public static class VbiDeconvolutionEngine
         for (int i = 0; i < searchLength; i++)
         {
             int from = Math.Max(0, searchStart + i - smoothRadius);
-            int to = Math.Min(plan.Length - 1, searchStart + i + smoothRadius);
+            int to = Math.Min(sampleCount - 1, searchStart + i + smoothRadius);
             float sum = 0;
             for (int sample = from; sample <= to; sample++) sum += resampled[sample];
             float value = sum / (to - from + 1);
@@ -510,7 +590,7 @@ public static class VbiDeconvolutionEngine
         float signalLevelThreshold = UseLegacyFixedDetectionForTest
             ? 64
             : options.SignalLevelThreshold;
-        if (signalMax < signalLevelThreshold) return null;
+        if (signalMax < signalLevelThreshold) return false;
 
         float accumulatedMax = smoothed[0];
         float previousAccumulated = accumulatedMax;
@@ -536,7 +616,7 @@ public static class VbiDeconvolutionEngine
         for (int roll = minimumRoll; roll < 20; roll++)
         {
             int start = roughStart + roll;
-            if (start + 21 * 8 > plan.Length) break;
+            if (start + 21 * 8 > sampleCount) break;
             for (int bit = 0; bit < 6; bit++)
             {
                 float sum = 0;
@@ -552,12 +632,12 @@ public static class VbiDeconvolutionEngine
 
         // Only eight final sample positions are compared with observed_crifc.
         double bestCriFcScore = double.MaxValue;
-        int bestStart = -1;
+        bestStart = -1;
         const int gradientLength = 16 * 8;
         for (int roll = -4; roll < 4; roll++)
         {
             int sliceStart = clockStart + roll + 8 * 8;
-            if (sliceStart < 0 || sliceStart + gradientLength > plan.Length) continue;
+            if (sliceStart < 0 || sliceStart + gradientLength > sampleCount) continue;
             double score = 0;
             for (int i = 0; i < gradientLength; i++)
             {
@@ -579,7 +659,7 @@ public static class VbiDeconvolutionEngine
             }
             if (score < bestCriFcScore) { bestCriFcScore = score; bestStart = clockStart + roll; }
         }
-        if (bestStart < 0 || bestStart + 24 * 8 > plan.Length) return null;
+        if (bestStart < 0 || bestStart + 24 * 8 > sampleCount) return false;
 
         // Do not launch the very expensive 8K/32K/64K-pattern OpenCL matcher for
         // arbitrary VBI noise. vhs-teletext performs the same kind of early
@@ -599,7 +679,7 @@ public static class VbiDeconvolutionEngine
         float criFcRangeThreshold = UseLegacyFixedDetectionForTest
             ? 28
             : options.CriFcRangeThreshold;
-        if (criFcRange < criFcRangeThreshold) return null;
+        if (criFcRange < criFcRangeThreshold) return false;
         float criFcMidpoint = (criFcMinimum + criFcMaximum) * 0.5f;
         double signedCorrelation = 0;
         double absoluteEnergy = 0;
@@ -610,35 +690,14 @@ public static class VbiDeconvolutionEngine
             signedCorrelation += centered * idealCriFc[bit];
             absoluteEnergy += Math.Abs(centered);
         }
-        double criFcConfidence = absoluteEnergy > 0
+        criFcConfidence = absoluteEnergy > 0
             ? signedCorrelation / absoluteEnergy
             : 0;
         double criFcConfidenceThreshold = UseLegacyFixedDetectionForTest
             ? 0.35
             : options.CriFcConfidenceThreshold;
-        if (criFcConfidence < criFcConfidenceThreshold) return null;
-
-        if (detectStartOnly)
-        {
-            detectedStartSample = (int)Math.Round(bestStart * bitWidth / 8.0);
-            return new PreparedLine(Array.Empty<float>(), null);
-        }
-
-        // Apply the manual phase correction only after locking and validation.
-        // Keep automatic clock-search detection independent of this correction.
-        bestStart += options.ExtraRoll;
-        PreparedLine? preparedLine = BuildPreparedLine(
-            resampled, plan.Length, bestStart, bitWidth,
-            manualPacketSpanSamples, null, null,
-            out detectedEndSample);
-        if (preparedLine is null) return null;
-        detectedStartSample = (int)Math.Round(bestStart * bitWidth / 8.0);
-        return preparedLine;
-        }
-        finally
-        {
-            ArrayPool<float>.Shared.Return(resampled);
-        }
+        if (criFcConfidence < criFcConfidenceThreshold) return false;
+        return true;
     }
 
     private static bool TryFindClippedClockRunIn(
@@ -647,7 +706,8 @@ public static class VbiDeconvolutionEngine
         VbiCaptureOptions options,
         out int packetStart,
         out float signalLow,
-        out float signalHigh)
+        out float signalHigh,
+        out double lockConfidence)
     {
         packetStart = 0;
         signalLow = 0;
@@ -714,6 +774,7 @@ public static class VbiDeconvolutionEngine
             signalLow = minimum;
             signalHigh = maximum;
         }
+        lockConfidence = bestConfidence;
         return bestConfidence >= minimumConfidence;
     }
 
