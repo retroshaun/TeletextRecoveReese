@@ -829,12 +829,15 @@ public static class VbiDeconvolutionEngine
 
     private static void NormalizeBits(float[] bits)
     {
+        // Measure levels from the packet itself. The trailing matcher context can
+        // fall past the active line, where some drivers (SAA7134 at 2048 samples)
+        // pad with 0/255 junk that would otherwise compress every real bit.
         float minimum = float.MaxValue;
         float maximum = float.MinValue;
-        foreach (float bit in bits)
+        for (int index = 0; index < Math.Min(bits.Length, TeletextPacketBits); index++)
         {
-            minimum = Math.Min(minimum, bit);
-            maximum = Math.Max(maximum, bit);
+            minimum = Math.Min(minimum, bits[index]);
+            maximum = Math.Max(maximum, bits[index]);
         }
         float range = Math.Max(maximum - minimum, 1);
         for (int index = 0; index < bits.Length; index++)

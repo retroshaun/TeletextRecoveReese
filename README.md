@@ -183,7 +183,7 @@ dotnet run --project TeletextRecoveReese -- -startnew
 
 ## Status
 
-- Current development version: **0.9.1**
+- Current development version: **0.9.2**
 - Actively developed and used for real restoration work.
 - Complete EN 300 706 coverage and broader interoperability testing are ongoing.
 - Licensed under GPL-3.0.
