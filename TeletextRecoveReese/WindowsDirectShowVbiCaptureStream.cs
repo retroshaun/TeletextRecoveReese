@@ -104,6 +104,13 @@ internal sealed class WindowsDirectShowVbiCaptureStream : LiveVbiCaptureStream, 
             && _source is IAMAnalogVideoDecoder decoder)
             DsError.ThrowExceptionForHR(decoder.put_TVFormat(standard.Value));
 
+        // Connect the video capture pin first. USB drivers that carry VBI inside
+        // the video stream (Empia emBDA) derive their streaming setup from it.
+        if (enableVideoPreview)
+            BuildVideoBranch();
+        else
+            BuildVideoSink();
+
         IPin vbiPin = DsFindPin.ByCategory(_source, PinCategory.VBI, 0)
             ?? throw new InvalidOperationException("The DirectShow VBI output pin disappeared while opening capture.");
         AMMediaType rawType = SelectRawVbiType(vbiPin, configuredFieldLines);
@@ -114,34 +121,115 @@ internal sealed class WindowsDirectShowVbiCaptureStream : LiveVbiCaptureStream, 
         _nullRenderer = (IBaseFilter)new NullRenderer();
         DsError.ThrowExceptionForHR(_graph.AddFilter(_grabberFilter, "Raw VBI Sample Grabber"));
         DsError.ThrowExceptionForHR(_graph.AddFilter(_nullRenderer, "Raw VBI Null Renderer"));
-        try { DsError.ThrowExceptionForHR(_grabber.SetMediaType(rawType)); }
+        try
+        {
+            DsError.ThrowExceptionForHR(_grabber.SetMediaType(rawType));
+            // Fix the pin's format and make sure every buffer the driver fills is
+            // at least as large as the VBI frame it says it will write.
+            if (vbiPin is IAMStreamConfig streamConfig)
+            {
+                try { streamConfig.SetFormat(rawType); } catch { }
+            }
+            SuggestVbiBufferSize(vbiPin, RequiredVbiBufferBytes(rawType));
+        }
         finally { DsUtils.FreeAMMediaType(rawType); }
         DsError.ThrowExceptionForHR(_grabber.SetOneShot(false));
         DsError.ThrowExceptionForHR(_grabber.SetBufferSamples(false));
         DsError.ThrowExceptionForHR(_grabber.SetCallback(this, 1));
 
-        IPin? grabberIn = DsFindPin.ByDirection(_grabberFilter, PinDirection.Input, 0);
-        IPin? grabberOut = DsFindPin.ByDirection(_grabberFilter, PinDirection.Output, 0);
-        IPin? rendererIn = DsFindPin.ByDirection(_nullRenderer, PinDirection.Input, 0);
+        try
+        {
+            // The capture graph builder inserts the Tee/Sink-to-Sink Converter
+            // after a kernel-streaming VBI pin. That is the standard Windows VBI
+            // path and owns buffer handling for the driver.
+            int hr = _captureGraph!.RenderStream(
+                PinCategory.VBI, MediaType.VBI, _source, _grabberFilter, _nullRenderer);
+            if (hr < 0)
+            {
+                UndoPartialVbiConnection(vbiPin);
+                ConnectVbiDirectly(vbiPin);
+            }
+        }
+        finally { Release(vbiPin); }
+
+        _mediaControl = (IMediaControl)_graph;
+        DsError.ThrowExceptionForHR(_mediaControl.Run());
+    }
+
+    private static int RequiredVbiBufferBytes(AMMediaType type)
+    {
+        VbiInfoHeader format = Marshal.PtrToStructure<VbiInfoHeader>(type.formatPtr);
+        long lines = (long)format.EndLine - format.StartLine + 1;
+        long fromStride = lines * format.StrideInBytes;
+        long required = Math.Max(Math.Max(fromStride, format.BufferSize), type.sampleSize);
+        return (int)Math.Clamp(required, 0, int.MaxValue);
+    }
+
+    private static void SuggestVbiBufferSize(IPin vbiPin, int bytes)
+    {
+        if (bytes <= 0 || vbiPin is not IAMBufferNegotiation negotiation) return;
+        try
+        {
+            negotiation.SuggestAllocatorProperties(new AllocatorProperties
+            {
+                cBuffers = -1,
+                cbBuffer = bytes,
+                cbAlign = -1,
+                cbPrefix = -1,
+            });
+        }
+        catch { }
+    }
+
+    private void UndoPartialVbiConnection(IPin vbiPin)
+    {
+        if (vbiPin.ConnectedTo(out IPin? peer) >= 0 && peer is not null)
+        {
+            IBaseFilter? inserted = null;
+            try
+            {
+                if (peer.QueryPinInfo(out PinInfo info) >= 0)
+                    inserted = info.filter;
+                try { _graph!.Disconnect(peer); } catch { }
+                try { _graph!.Disconnect(vbiPin); } catch { }
+                if (inserted is not null
+                    && !ReferenceEquals(inserted, _grabberFilter)
+                    && !ReferenceEquals(inserted, _nullRenderer))
+                {
+                    try { _graph!.RemoveFilter(inserted); } catch { }
+                }
+            }
+            finally { Release(inserted); Release(peer); }
+        }
+        foreach (IBaseFilter? filter in new[] { _grabberFilter, _nullRenderer })
+        {
+            if (filter is null) continue;
+            foreach (PinDirection direction in new[] { PinDirection.Input, PinDirection.Output })
+            {
+                IPin? pin = DsFindPin.ByDirection(filter, direction, 0);
+                if (pin is null) continue;
+                try { _graph!.Disconnect(pin); } catch { }
+                finally { Release(pin); }
+            }
+        }
+    }
+
+    private void ConnectVbiDirectly(IPin vbiPin)
+    {
+        IPin? grabberIn = DsFindPin.ByDirection(_grabberFilter!, PinDirection.Input, 0);
+        IPin? grabberOut = DsFindPin.ByDirection(_grabberFilter!, PinDirection.Output, 0);
+        IPin? rendererIn = DsFindPin.ByDirection(_nullRenderer!, PinDirection.Input, 0);
         try
         {
             if (grabberIn is null || grabberOut is null || rendererIn is null)
                 throw new InvalidOperationException("Could not create the DirectShow VBI sample path.");
-            DsError.ThrowExceptionForHR(_graph.Connect(vbiPin, grabberIn));
-        DsError.ThrowExceptionForHR(_graph.Connect(grabberOut, rendererIn));
+            DsError.ThrowExceptionForHR(_graph!.Connect(vbiPin, grabberIn));
+            DsError.ThrowExceptionForHR(_graph.Connect(grabberOut, rendererIn));
         }
         finally
         {
-            Release(vbiPin); Release(grabberIn); Release(grabberOut); Release(rendererIn);
+            Release(grabberIn); Release(grabberOut); Release(rendererIn);
         }
-
-        if (enableVideoPreview)
-            BuildVideoBranch();
-        else
-            BuildVideoSink();
-
-        _mediaControl = (IMediaControl)_graph;
-        DsError.ThrowExceptionForHR(_mediaControl.Run());
     }
 
     private void BuildVideoBranch()
