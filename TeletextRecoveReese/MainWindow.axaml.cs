@@ -5124,6 +5124,10 @@ public partial class MainWindow : Window
         string? selectedVideoInterface = null;
         Task linuxPreviewTask = Task.CompletedTask;
         WindowsDirectShowPreview? directShowPreview = null;
+        // The in-flight DirectShow preview build. It completes only after a stale
+        // build (one superseded by StopPreview) has been disposed, so awaiting it
+        // guarantees no preview graph is still holding the capture device.
+        Task directShowPreviewBuild = Task.CompletedTask;
         LatestUiPreview<DirectShowPreviewFrame>? directShowPreviewUpdates = null;
         LatestUiPreview<byte[]>? linuxPreviewUpdates = null;
         CancellationTokenSource? previewCancellation = null;
@@ -5152,12 +5156,25 @@ public partial class MainWindow : Window
             previewGeneration++;
         }
 
+        // Waits until any DirectShow preview graph that was still being opened
+        // has finished and been torn down, then gives the driver a moment to
+        // release its streaming resources before the device is opened again.
+        async Task WaitForDirectShowPreviewReleaseAsync()
+        {
+            if (!OperatingSystem.IsWindows()) return;
+            Task pending = directShowPreviewBuild;
+            if (pending.IsCompleted) return;
+            try { await pending; } catch { }
+            await Task.Delay(300);
+        }
+
         async Task RestartPreviewAsync()
         {
             if (suppressPreviewRestart) return;
             StopPreview();
             int restartGeneration = previewGeneration;
             await linuxPreviewTask;
+            await WaitForDirectShowPreviewReleaseAsync();
             if (restartGeneration != previewGeneration) return;
             ClearPreviewImage();
             if (disableVideoPreview)
@@ -5205,12 +5222,28 @@ public partial class MainWindow : Window
                         }
                     });
                     directShowPreviewUpdates = previewUpdates;
-                    directShowPreview = await Task.Run(() => new WindowsDirectShowPreview(
-                        captureInterface.Name,
-                        selectedDirectShowInput,
-                        selectedDirectShowStandard,
-                        frame => previewUpdates.Post(frame)));
-                    previewStatusText.Text = $"Live DirectShow preview · {selectedDirectShowInput.Name} · {selectedDirectShowStandard.Name}";
+                    async Task BuildPreviewAsync()
+                    {
+                        WindowsDirectShowPreview built = await Task.Run(() => new WindowsDirectShowPreview(
+                            captureInterface.Name,
+                            selectedDirectShowInput,
+                            selectedDirectShowStandard,
+                            frame => previewUpdates.Post(frame)));
+                        // This continuation runs on the UI thread, so the check and
+                        // the assignment cannot be interleaved with StopPreview.
+                        if (windowsGeneration != previewGeneration)
+                        {
+                            // Superseded while opening (selection changed, dialog
+                            // closed or capture started): never leave it running.
+                            built.Dispose();
+                            return;
+                        }
+                        directShowPreview = built;
+                        previewStatusText.Text = $"Live DirectShow preview · {selectedDirectShowInput.Name} · {selectedDirectShowStandard.Name}";
+                    }
+                    Task build = BuildPreviewAsync();
+                    directShowPreviewBuild = build;
+                    await build;
                 }
                 catch (Exception ex)
                 {
@@ -5322,6 +5355,7 @@ public partial class MainWindow : Window
                 cardNameText.Text = "Capture card: reading…";
                 try
                 {
+                    await WaitForDirectShowPreviewReleaseAsync();
                     DirectShowDeviceInfo device = await Task.Run(() =>
                         WindowsDirectShowCapture.QueryDevice(captureInterface.Name));
                     if (interfaceCombo.SelectedItem is not LiveCaptureInterface current
@@ -5525,8 +5559,17 @@ public partial class MainWindow : Window
             _sessionState.LastLiveCaptureStandard = captureStandard?.Id
                 ?? (directShowStandard is null ? null : (ulong)(int)directShowStandard.Value);
             SaveSessionState();
+            useButton.IsEnabled = false;
             StopPreview();
             await linuxPreviewTask;
+            if (OperatingSystem.IsWindows())
+            {
+                // Make sure no picker preview graph is still opening or running on
+                // the device, and let the driver settle before the capture graph
+                // opens it again.
+                await WaitForDirectShowPreviewReleaseAsync();
+                await Task.Delay(300);
+            }
             dialog.Close();
             if (OperatingSystem.IsLinux())
                 await StartLiveVbiCaptureAsync(
@@ -7138,6 +7181,27 @@ public partial class MainWindow : Window
                     dialog.Close();
                 });
             });
+            if (input is WindowsDirectShowVbiCaptureStream)
+            {
+                // If the driver never delivers a VBI sample, say so rather than
+                // leaving "Opening…" on screen indefinitely.
+                CancellationToken noDataToken = cancellation.Token;
+                _ = Task.Run(async () =>
+                {
+                    try { await Task.Delay(TimeSpan.FromSeconds(8), noDataToken); }
+                    catch (OperationCanceledException) { return; }
+                    if (input.CapturedFrames > 0) return;
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        if (noDataToken.IsCancellationRequested || allowClose
+                            || input.CapturedFrames > 0) return;
+                        phaseText.Text =
+                            $"Still waiting for VBI data from {captureInterface.Name}. The device opened, "
+                            + "but the driver has not delivered any VBI samples. Check the input and TV "
+                            + "standard, and that a video source is playing.";
+                    });
+                });
+            }
             await dialog.ShowDialog(this);
 
             // Pages assembled for the live monitor are deliberately temporary.

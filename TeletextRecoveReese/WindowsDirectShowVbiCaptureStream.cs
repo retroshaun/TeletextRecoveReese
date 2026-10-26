@@ -137,6 +137,8 @@ internal sealed class WindowsDirectShowVbiCaptureStream : LiveVbiCaptureStream, 
 
         if (enableVideoPreview)
             BuildVideoBranch();
+        else
+            BuildVideoSink();
 
         _mediaControl = (IMediaControl)_graph;
         DsError.ThrowExceptionForHR(_mediaControl.Run());
@@ -179,6 +181,33 @@ internal sealed class WindowsDirectShowVbiCaptureStream : LiveVbiCaptureStream, 
             _videoBottomUp = header.BmiHeader.Height > 0;
         }
         finally { DsUtils.FreeAMMediaType(connected); }
+    }
+
+    /// <summary>
+    /// Keeps the video capture pin running even when no preview is wanted.
+    /// Some USB drivers (for example Empia emBDA) carry VBI inside the video
+    /// stream and never start streaming unless the capture pin is connected,
+    /// leaving the VBI pin silent. A bare null renderer costs no conversion work.
+    /// </summary>
+    private void BuildVideoSink()
+    {
+        try
+        {
+            _videoNullRenderer = (IBaseFilter)new NullRenderer();
+            DsError.ThrowExceptionForHR(_graph!.AddFilter(_videoNullRenderer, "Video Sink Null Renderer"));
+            DsError.ThrowExceptionForHR(_captureGraph!.RenderStream(
+                PinCategory.Capture, MediaType.Video, _source!, null, _videoNullRenderer));
+        }
+        catch
+        {
+            // Another application may own the video pin; carry on VBI-only.
+            if (_videoNullRenderer is not null)
+            {
+                try { _graph?.RemoveFilter(_videoNullRenderer); } catch { }
+                Release(_videoNullRenderer);
+                _videoNullRenderer = null;
+            }
+        }
     }
 
     private int OnVideoBuffer(IntPtr buffer, int bufferLen)

@@ -50,7 +50,9 @@ internal sealed class WindowsDirectShowPreview : ISampleGrabberCB, IDisposable
 
         if (input.PinIndex is int inputPin)
         {
-            _crossbarFilter = FindMatchingCrossbar(device.DevicePath);
+            // Use the same crossbar lookup as the VBI capture graph so the preview
+            // and the capture always route the same crossbar.
+            _crossbarFilter = WindowsDirectShowCapture.FindCrossbarFilter(device.Name, device.DevicePath);
             if (_crossbarFilter is not IAMCrossbar crossbar)
                 throw new InvalidOperationException("The selected DirectShow crossbar is no longer available.");
             DsError.ThrowExceptionForHR(_graph.AddFilter(_crossbarFilter, "Video Crossbar"));
@@ -151,25 +153,6 @@ internal sealed class WindowsDirectShowPreview : ISampleGrabberCB, IDisposable
         _graph = null;
         _sampleGrabber = null;
         _mediaControl = null;
-    }
-
-    private static IBaseFilter FindMatchingCrossbar(string capturePath)
-    {
-        string hardwareKey = HardwareInstanceKey(capturePath);
-        DsDevice device = DsDevice.GetDevicesOfCat(FilterCategory.AMKSCrossbar)
-            .OrderByDescending(candidate => HardwareInstanceKey(candidate.DevicePath).Equals(
-                hardwareKey, StringComparison.OrdinalIgnoreCase))
-            .FirstOrDefault(candidate => BindSupportsCrossbar(candidate))
-            ?? throw new InvalidOperationException("No IAMCrossbar filter was found for this capture device.");
-        return BindFilter(device);
-    }
-
-    private static bool BindSupportsCrossbar(DsDevice device)
-    {
-        IBaseFilter? filter = null;
-        try { filter = BindFilter(device); return filter is IAMCrossbar; }
-        catch { return false; }
-        finally { Release(filter); }
     }
 
     private static IBaseFilter BindFilter(DsDevice device)
