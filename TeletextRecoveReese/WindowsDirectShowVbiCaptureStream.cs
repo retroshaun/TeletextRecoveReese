@@ -168,12 +168,15 @@ internal sealed class WindowsDirectShowVbiCaptureStream : LiveVbiCaptureStream, 
     private static void SuggestVbiBufferSize(IPin vbiPin, int bytes)
     {
         if (bytes <= 0 || vbiPin is not IAMBufferNegotiation negotiation) return;
+        // Diagnostic headroom: some drivers (Empia emBDA64) appear to write past
+        // the VBI frame size they advertise. Oversized buffers absorb that.
+        long oversized = Math.Max((long)bytes * 4, 1L << 20);
         try
         {
             negotiation.SuggestAllocatorProperties(new AllocatorProperties
             {
-                cBuffers = -1,
-                cbBuffer = bytes,
+                cBuffers = 16,
+                cbBuffer = (int)Math.Min(oversized, int.MaxValue),
                 cbAlign = -1,
                 cbPrefix = -1,
             });
